@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-sample-pod
+  labels:
+    app: app-sample
+spec:
+  containers:
+  - name: app-sample-c
+    image: app-sample:latest
+    imagePullPolicy: IfNotPresent
+    ports:
+    - containerPort: 8888
