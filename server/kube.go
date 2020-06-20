@@ -70,9 +70,8 @@ func CreateService(
 	clientset kubernetes.Interface,
 	serviceName string,
 	label string,
-	nodePortName string,
+	clusterIpName string,
 	port int32,
-	nodePort int32,
 ) (*apiv1.Service, error) {
 	service := &apiv1.Service{
 		TypeMeta: metav1.TypeMeta{
@@ -84,13 +83,12 @@ func CreateService(
 			Labels: map[string]string{"app": label},
 		},
 		Spec: apiv1.ServiceSpec{
-			Type: "NodePort",
+			Type: "ClusterIP",
 			Ports: []apiv1.ServicePort{
 				{
-					Name:     nodePortName,
+					Name:     clusterIpName,
 					Protocol: "TCP",
 					Port:     port,
-					NodePort: nodePort,
 				},
 			},
 			Selector: map[string]string{"app": label},

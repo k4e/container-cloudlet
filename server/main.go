@@ -11,6 +11,8 @@ import (
 const local_addr = ":9999"
 const timeout = 30
 
+var fwdsvc = make(map[string](*ForwardingService))
+
 func main() {
 	fmt.Println("Interface IP addresses ...")
 	PrintInterfaceAddrs()
@@ -22,7 +24,7 @@ func main() {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			continue
 		}
 		go handleConnection(conn)
@@ -39,13 +41,13 @@ func handleConnection(conn net.Conn) {
 	var bReq []byte
 	bReq, err := Readline(conn)
 	if err != nil {
-		printError(err)
+		PrintError(err)
 		return
 	}
 	fmt.Println("Request: " + string(bReq))
 	var req Request
 	if err := json.Unmarshal(bReq, &req); err != nil {
-		printError(err)
+		PrintError(err)
 		return
 	}
 	switch req.Op {
@@ -59,72 +61,88 @@ func handleConnection(conn net.Conn) {
 }
 
 func doCreate(req *Request) {
-	label := req.Create.Name
+	name := req.Create.Name
 	podName := req.Create.Name + "-pod"
 	containerName := req.Create.Name + "-c"
-	serviceName := req.Create.Name + "-svc"
-	nodePortName := req.Create.Name + "-np"
 	port := int32(req.Create.Port)
 	nodePort := int32(req.Create.NodePort)
+	serviceName := req.Create.Name + "-svc"
+	clusterIpName := req.Create.Name + "-cip"
 	clientset, err := NewClient()
 	if err != nil {
-		printError(err)
+		PrintError(err)
 		return
 	}
 	if pod, err := CreatePod(
 		clientset,
 		podName,
-		label,
+		name,
 		containerName,
 		req.Create.Image,
 		port,
 	); err == nil {
 		fmt.Println("Created pod: " + pod.GetName())
 	} else {
-		printError(err)
+		PrintError(err)
 	}
 	if svc, err := CreateService(
 		clientset,
 		serviceName,
-		label,
-		nodePortName,
+		name,
+		clusterIpName,
 		port,
-		nodePort,
 	); err == nil {
 		fmt.Println("Created service: " + svc.GetName())
+		clientAddr := fmt.Sprintf(":%d", nodePort)
+		hostAddr := fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, port)
+		if f, err := NewForwarding("tcp", clientAddr, hostAddr); err == nil {
+			fwdsvc[name] = f
+			if err := f.Start(); err != nil {
+				PrintError(err)
+			}
+		} else {
+			PrintError(err)
+		}
 	} else {
-		printError(err)
+		PrintError(err)
 	}
+
 }
 
 func doDelete(req *Request) {
+	name := req.Delete.Name
 	podName := req.Delete.Name + "-pod"
 	serviceName := req.Delete.Name + "-svc"
 	clientset, err := NewClient()
 	if err != nil {
-		printError(err)
+		PrintError(err)
 		return
 	}
-	if err := DeletePod(clientset, podName); err == nil {
-		fmt.Println("Deleted pod: " + podName)
-	} else {
-		printError(err)
+	if f, ok := fwdsvc[name]; ok {
+		if err := f.Close(); err != nil {
+			PrintError(err)
+		}
 	}
 	if err := DeleteService(clientset, serviceName); err == nil {
 		fmt.Println("Deleted service: " + serviceName)
 	} else {
-		printError(err)
+		PrintError(err)
+	}
+	if err := DeletePod(clientset, podName); err == nil {
+		fmt.Println("Deleted pod: " + podName)
+	} else {
+		PrintError(err)
 	}
 }
 
 func doUnsupported(req *Request) {
-	printErrorS("Unsupported operation")
+	PrintErrorS("Unsupported operation")
 }
 
-func printError(e error) {
-	printErrorS(e.Error())
+func PrintError(e error) {
+	PrintErrorS(e.Error())
 }
 
-func printErrorS(s string) {
+func PrintErrorS(s string) {
 	fmt.Fprintln(os.Stderr, s)
 }
