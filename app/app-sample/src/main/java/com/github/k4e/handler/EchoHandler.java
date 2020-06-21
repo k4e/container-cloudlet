@@ -7,8 +7,11 @@ import java.net.Socket;
 
 public class EchoHandler extends Handler {
     
-    public EchoHandler(Socket sock) {
+    private final int sleepMs;
+
+    public EchoHandler(Socket sock, int sleepMs) {
         super(sock);
+        this.sleepMs = sleepMs;
     }
 
     @Override
@@ -24,10 +27,15 @@ public class EchoHandler extends Handler {
                     break;
                 }
                 System.out.print(new String(buf, 0, count));
+                if (sleepMs > 0) {
+                    Thread.sleep(sleepMs);
+                }
                 writer.print(buf);
                 writer.flush();
             }
         } catch (IOException e) {
+            e.printStackTrace();
+        } catch (InterruptedException e) {
             e.printStackTrace();
         } finally {
             System.out.printf("[Closing %s]\n", getSocket().getInetAddress());

@@ -65,7 +65,8 @@ func doCreate(req *Request) {
 	podName := req.Create.Name + "-pod"
 	containerName := req.Create.Name + "-c"
 	port := int32(req.Create.Port)
-	nodePort := int32(req.Create.NodePort)
+	extPort := int32(req.Create.ExtPort)
+	env := req.Create.Env
 	serviceName := req.Create.Name + "-svc"
 	clusterIpName := req.Create.Name + "-cip"
 	clientset, err := NewClient()
@@ -80,6 +81,7 @@ func doCreate(req *Request) {
 		containerName,
 		req.Create.Image,
 		port,
+		env,
 	); err == nil {
 		fmt.Println("Created pod: " + pod.GetName())
 	} else {
@@ -93,7 +95,7 @@ func doCreate(req *Request) {
 		port,
 	); err == nil {
 		fmt.Println("Created service: " + svc.GetName())
-		clientAddr := fmt.Sprintf(":%d", nodePort)
+		clientAddr := fmt.Sprintf(":%d", extPort)
 		hostAddr := fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, port)
 		if f, err := NewForwarding("tcp", clientAddr, hostAddr); err == nil {
 			fwdsvc[name] = f

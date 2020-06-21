@@ -28,7 +28,15 @@ func CreatePod(
 	containerName string,
 	image string,
 	containerPort int32,
+	env map[string]string,
 ) (*apiv1.Pod, error) {
+	var envVars []apiv1.EnvVar
+	for k, v := range env {
+		envVars = append(envVars, apiv1.EnvVar{
+			Name:  k,
+			Value: v,
+		})
+	}
 	pod := &apiv1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
@@ -49,6 +57,7 @@ func CreatePod(
 							ContainerPort: containerPort,
 						},
 					},
+					Env: envVars,
 				},
 			},
 			ImagePullSecrets: []apiv1.LocalObjectReference{

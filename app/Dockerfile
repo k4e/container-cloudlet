@@ -6,4 +6,4 @@ RUN apk --update add openjdk8 maven && \
     mvn clean package
 
 WORKDIR /app-sample
-CMD ["java", "-jar", "target/container-cloudlet-app-sample-0.0.1.jar"]
+CMD ["java", "-jar", "target/container-cloudlet-app-sample-0.0.1-jar-with-dependencies.jar"]

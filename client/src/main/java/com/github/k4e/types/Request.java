@@ -1,6 +1,7 @@
 package com.github.k4e.types;
 
 import java.io.Serializable;
+import java.util.Map;
 
 public class Request implements Serializable {
 
@@ -16,12 +17,14 @@ public class Request implements Serializable {
         public String name;
         public String image;
         public Integer port;
-        public Integer nodePort;
-        public Create(String name, String image, int port, int nodePort) {
+        public Integer extPort;
+        public Map<String, String> env;
+        public Create(String name, String image, int port, int extPort, Map<String, String> env) {
             this.name = name;
             this.image = image;
             this.port = port;
-            this.nodePort = nodePort;
+            this.extPort = extPort;
+            this.env = env;
         }
     }
 
