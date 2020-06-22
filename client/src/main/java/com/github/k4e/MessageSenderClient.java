@@ -27,6 +27,7 @@ public class MessageSenderClient {
         } finally {
             if (sock != null) {
                 sock.close();
+                System.out.println("Socket closed");
             }
         }
     }

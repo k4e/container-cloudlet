@@ -87,7 +87,11 @@ func doCreate(req *Request) {
 	} else {
 		PrintError(err)
 	}
-	if svc, err := CreateService(
+	clusterIP := ""
+	if svc, err := GetService(clientset, serviceName); err == nil && svc.Spec.ClusterIP != "" {
+		fmt.Println("Use existing service: " + svc.GetName())
+		clusterIP = svc.Spec.ClusterIP
+	} else if svc, err := CreateService(
 		clientset,
 		serviceName,
 		name,
@@ -95,8 +99,15 @@ func doCreate(req *Request) {
 		port,
 	); err == nil {
 		fmt.Println("Created service: " + svc.GetName())
+		clusterIP = svc.Spec.ClusterIP
+	} else {
+		PrintError(err)
+	}
+	if _, ok := fwdsvc[name]; ok {
+		fmt.Println("Use existing forwarding service")
+	} else if clusterIP != "" {
 		clientAddr := fmt.Sprintf(":%d", extPort)
-		hostAddr := fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, port)
+		hostAddr := fmt.Sprintf("%s:%d", clusterIP, port)
 		if f, err := NewForwarding("tcp", clientAddr, hostAddr); err == nil {
 			fwdsvc[name] = f
 			if err := f.Start(); err != nil {
@@ -106,9 +117,8 @@ func doCreate(req *Request) {
 			PrintError(err)
 		}
 	} else {
-		PrintError(err)
+		PrintErrorS("Error: forwarding service cannot not started because ClusterIP is unknown")
 	}
-
 }
 
 func doDelete(req *Request) {
@@ -124,6 +134,7 @@ func doDelete(req *Request) {
 		if err := f.Close(); err != nil {
 			PrintError(err)
 		}
+		delete(fwdsvc, name)
 	}
 	if err := DeleteService(clientset, serviceName); err == nil {
 		fmt.Println("Deleted service: " + serviceName)
@@ -142,7 +153,7 @@ func doUnsupported(req *Request) {
 }
 
 func PrintError(e error) {
-	PrintErrorS(e.Error())
+	fmt.Fprintf(os.Stderr, "%v\n", e)
 }
 
 func PrintErrorS(s string) {

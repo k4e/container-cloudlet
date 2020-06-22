@@ -10,7 +10,7 @@ public class CloudletClient {
     
     public static final Request SAMPLE_CREATE = Request.create(
         new Request.Create("app-sample", "k4edev/app-sample:latest", 8888, 30088,
-        ImmutableMap.of("SLEEP_MS", "4000"))
+        ImmutableMap.of("SLEEP_MS", "10000"))
     );
     public static final Request SAMPLE_DELETE = Request.delete(
         new Request.Delete("app-sample")

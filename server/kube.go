@@ -67,8 +67,8 @@ func CreatePod(
 			},
 		},
 	}
-	result, err := clientset.CoreV1().Pods("default").Create(
-		context.TODO(), pod, metav1.CreateOptions{})
+	result, err := clientset.CoreV1().Pods("default").
+		Create(context.TODO(), pod, metav1.CreateOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -103,12 +103,20 @@ func CreateService(
 			Selector: map[string]string{"app": label},
 		},
 	}
-	result, err := clientset.CoreV1().Services("default").Create(
-		context.TODO(), service, metav1.CreateOptions{})
+	result, err := clientset.CoreV1().Services("default").
+		Create(context.TODO(), service, metav1.CreateOptions{})
 	if err != nil {
 		return nil, err
 	}
 	return result, nil
+}
+
+func GetService(
+	clientset kubernetes.Interface,
+	serviceName string,
+) (*apiv1.Service, error) {
+	return clientset.CoreV1().Services("default").
+		Get(context.TODO(), serviceName, metav1.GetOptions{})
 }
 
 func DeletePod(
