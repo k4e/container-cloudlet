@@ -67,7 +67,7 @@
 1. Compile
     ```
     $ cd container-cloudlet/client
-    $ mvn clean compile
+    $ mvn clean package
     ```
 
 ## Usage
@@ -82,15 +82,15 @@
 
 - Create a sample app on server
     ```
-    $ mvn exec:java -Dexec.args="$(sudo minikube ip) 9999 create"
+    $ java -jar target/client.jar $(sudo minikube ip) 9999 create
     ```
 
 - Send a message to the sample app on server
     ```
-    $ mvn exec:java -Dexec.args="$(sudo minikube ip) 30088 send hello?"
+    $ java -jar target/client.jar $(sudo minikube ip) 30088 send hello?
     ```
 
 - Delete the sample app on server
     ```
-    $ mvn exec:java -Dexec.args="$(sudo minikube ip) 9999 delete"
+    $ java -jar target/client.jar $(sudo minikube ip) 9999 delete
     ```
