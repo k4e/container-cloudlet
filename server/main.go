@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"time"
 )
 
 const local_addr = ":9999"
 const timeout = 30
 
-var fwdsvc = make(map[string](*ForwardingService))
+var fwdsvc sync.Map
 
 func main() {
 	fmt.Println("Interface IP addresses ...")
@@ -103,16 +104,13 @@ func doCreate(req *Request) {
 	} else {
 		PrintError(err)
 	}
-	if _, ok := fwdsvc[name]; ok {
+	if _, ok := fwdsvc.Load(name); ok {
 		fmt.Println("Use existing forwarding service")
 	} else if clusterIP != "" {
 		clientAddr := fmt.Sprintf(":%d", extPort)
-		hostAddr := fmt.Sprintf("%s:%d", clusterIP, port)
-		if f, err := NewForwarding("tcp", clientAddr, hostAddr); err == nil {
-			fwdsvc[name] = f
-			if err := f.Start(); err != nil {
-				PrintError(err)
-			}
+		appAddr := fmt.Sprintf("%s:%d", clusterIP, port)
+		if f, err := StartForwardingService("tcp", clientAddr, appAddr); err == nil {
+			fwdsvc.Store(name, f)
 		} else {
 			PrintError(err)
 		}
@@ -130,11 +128,11 @@ func doDelete(req *Request) {
 		PrintError(err)
 		return
 	}
-	if f, ok := fwdsvc[name]; ok {
-		if err := f.Close(); err != nil {
+	if v, ok := fwdsvc.Load(name); ok {
+		if err := v.(*ForwardingService).Close(); err != nil {
 			PrintError(err)
 		}
-		delete(fwdsvc, name)
+		fwdsvc.Delete(name)
 	}
 	if err := DeleteService(clientset, serviceName); err == nil {
 		fmt.Println("Deleted service: " + serviceName)

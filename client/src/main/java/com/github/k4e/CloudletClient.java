@@ -1,7 +1,9 @@
 package com.github.k4e;
 
 import java.io.IOException;
+import java.util.UUID;
 
+import com.github.k4e.types.ProtocolHeader;
 import com.github.k4e.types.Request;
 import com.google.common.collect.ImmutableMap;
 import com.google.gson.Gson;
@@ -10,7 +12,7 @@ public class CloudletClient {
     
     public static final Request SAMPLE_CREATE = Request.create(
         new Request.Create("app-sample", "k4edev/app-sample:latest", 8888, 30088,
-        ImmutableMap.of("SLEEP_MS", "10000"))
+        ImmutableMap.of("SLEEP_MS", "5000"))
     );
     public static final Request SAMPLE_DELETE = Request.delete(
         new Request.Delete("app-sample")
@@ -24,6 +26,13 @@ public class CloudletClient {
         send(host, port, SAMPLE_DELETE);
     }
 
+    public static void session(
+        String host, int port, String msg, UUID sessionId, String hostIP, boolean resume
+    ) throws IOException {
+        ProtocolHeader header = ProtocolHeader.create(sessionId, hostIP, resume);
+        send(host, port, header, msg);
+    }
+
     private static void send(String host, int port, Request req) throws IOException {
         Gson gson = new Gson();
         String msg = gson.toJson(req);
@@ -31,6 +40,11 @@ public class CloudletClient {
     }
 
     private static void send(String host, int port, String msg) throws IOException {
-        MessageSenderClient.send(host, port, msg);
+        MessageSenderClient.ofDefault().send(host, port, msg);
+    }
+
+    private static void send(String host, int port, ProtocolHeader header, String msg)
+    throws IOException {
+        MessageSenderClient.ofSession(header).send(host, port, msg);
     }
 }

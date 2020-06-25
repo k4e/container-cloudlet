@@ -3,71 +3,52 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"strings"
 	"sync"
 )
 
-const bufSize = 64 * 1024
-
 type ForwardingService struct {
-	muxStart   sync.Mutex
 	muxClose   sync.Mutex
+	closed     bool
 	network    string
 	clientAddr string
-	hostAddr   string
+	appAddr    string
 	ln         net.Listener
-	started    bool
-	closed     bool
+	sp         SessionPool
 }
 
-func NewForwarding(network, clientAddr, hostAddr string) (*ForwardingService, error) {
+func StartForwardingService(network, clientAddr, appAddr string) (*ForwardingService, error) {
 	p := &ForwardingService{
+		closed:     false,
 		network:    network,
 		clientAddr: clientAddr,
-		hostAddr:   hostAddr,
+		appAddr:    appAddr,
 		ln:         nil,
-		started:    false,
-		closed:     false,
 	}
 	ln, err := net.Listen(network, clientAddr)
+	if err != nil {
+		return nil, err
+	}
 	p.ln = ln
+	go p.routine()
 	return p, err
-}
-
-func (p *ForwardingService) Start() error {
-	if p.ln == nil {
-		return errors.New("Socket not listening")
-	}
-	var err error
-	p.muxStart.Lock()
-	if !p.started {
-		p.started = true
-		go p.routine()
-	} else {
-		err = errors.New("Service already started")
-	}
-	p.muxStart.Unlock()
-	return err
 }
 
 func (p *ForwardingService) Close() error {
 	if p.ln == nil {
 		return errors.New("Socket not listening")
 	}
-	var err error
 	p.muxClose.Lock()
+	err := p.ln.Close()
 	p.closed = true
-	err = p.ln.Close()
 	p.muxClose.Unlock()
 	return err
 }
 
 func (p *ForwardingService) routine() {
-	fmt.Printf("Forwarding started: %s -> %s\n", p.clientAddr, p.hostAddr)
+	fmt.Printf("Forwarding open: client=%s, app=%s\n", p.clientAddr, p.appAddr)
 	defer func() {
-		fmt.Printf("Forwarding closed: %s -> %s\n", p.clientAddr, p.hostAddr)
+		fmt.Printf("Forwarding closed: client=%s, app=%s\n", p.clientAddr, p.appAddr)
 	}()
 	for {
 		brk := false
@@ -77,78 +58,8 @@ func (p *ForwardingService) routine() {
 		if brk {
 			break
 		}
-		clientConn, err := p.ln.Accept()
-		if err != nil {
-			if !isClosedError(err) {
-				p.printError(err)
-			}
-			continue
-		}
-		p.onAccept(clientConn)
-	}
-}
-
-func (p *ForwardingService) onAccept(clientConn net.Conn) {
-	var hostConn net.Conn
-	close := func() {
-		if clientConn != nil {
-			if err := clientConn.Close(); err != nil {
-				p.printError(err)
-			}
-		}
-		if hostConn != nil {
-			if err := hostConn.Close(); err != nil {
-				p.printError(err)
-			}
+		if err := p.sp.Accept(p.ln, p.network, p.appAddr); err != nil {
+			PrintError(err)
 		}
 	}
-	hostConn, err := net.Dial(p.network, p.hostAddr)
-	if err != nil {
-		p.printError(err)
-		return
-	}
-	wg := &sync.WaitGroup{}
-	var once sync.Once
-	stream := func(reader, writer net.Conn) {
-		defer func() {
-			once.Do(close)
-			wg.Done()
-		}()
-		buf := make([]byte, bufSize)
-		for {
-			n, err := reader.Read(buf)
-			if err != nil {
-				if err != io.EOF && !isClosedError(err) {
-					p.printError(err)
-				}
-				return
-			}
-			if n > 0 {
-				m, err := writer.Write(buf[:n])
-				if err != nil {
-					if err != io.EOF && !isClosedError(err) {
-						p.printError(err)
-					}
-					return
-				}
-				if n != m {
-					p.printError(errors.New(fmt.Sprintf("Read: %d, Write: %d", n, m)))
-				}
-			}
-		}
-	}
-	wg.Add(1)
-	go stream(clientConn, hostConn)
-	wg.Add(1)
-	go stream(hostConn, clientConn)
-	wg.Wait()
-}
-
-func (p *ForwardingService) printError(e error) {
-	PrintError(e)
-}
-
-func isClosedError(e error) bool {
-	want := "use of closed network connection"
-	return strings.Contains(e.Error(), want)
 }

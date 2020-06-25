@@ -85,10 +85,7 @@
     $ java -jar target/client.jar $(sudo minikube ip) 9999 create
     ```
 
-- Send a message to the sample app on server
-    ```
-    $ java -jar target/client.jar $(sudo minikube ip) 30088 send hello?
-    ```
+- Session operation is work-in-progress
 
 - Delete the sample app on server
     ```
