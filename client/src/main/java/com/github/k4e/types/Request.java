@@ -4,6 +4,7 @@ import java.io.Serializable;
 import java.util.Map;
 
 public class Request implements Serializable {
+    private static final long serialVersionUID = -8180504938175762670L;
 
     public static Request create(Create create) {
         return new Request("create", create, null);
@@ -14,6 +15,7 @@ public class Request implements Serializable {
     }
 
     public static class Create implements Serializable {
+        private static final long serialVersionUID = -204586336929613360L;
         public String name;
         public String image;
         public Integer port;
@@ -29,6 +31,7 @@ public class Request implements Serializable {
     }
 
     public static class Delete implements Serializable {
+        private static final long serialVersionUID = -7285750816295865630L;
         public String name;
         public Delete(String name) {
             this.name = name;

@@ -43,6 +43,7 @@ func (p *SessionPool) Accept(ln net.Listener, network, appAddr string) error {
 		if !IsClosedError(err) {
 			return err
 		}
+		return nil
 	}
 	head, err := ReadProtocolHeader(clientConn)
 	if err != nil {

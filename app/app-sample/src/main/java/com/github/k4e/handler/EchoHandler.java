@@ -20,8 +20,8 @@ public class EchoHandler extends Handler {
             System.out.printf("[Accepted %s]\n", getSocket().getInetAddress());
             InputStreamReader reader = new InputStreamReader(getSocket().getInputStream());
             PrintWriter writer = new PrintWriter(getSocket().getOutputStream());
-            char[] buf = new char[1024];
             while (!getSocket().isClosed()) {
+                char[] buf = new char[4096];
                 int count = reader.read(buf);
                 if (count < 1) {
                     break;

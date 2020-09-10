@@ -57,6 +57,18 @@
     $ sudo kubectl create secret generic regcred --from-file=.dockerconfigjson=$HOME/.docker/config.json --type=kubernetes.io/dockerconfigjson
     ```
 
+### Server App (Docker Image)
+
+1. Build docker image
+    ```
+    $ docker build -t <username>/app-sample:latest .
+    ```
+
+1. Push image
+    ```
+    $ docker push <username>/app-sample:latest
+    ```
+
 ### Client
 
 1. Install OpenJDK and Maven
@@ -85,7 +97,10 @@
     $ java -jar target/client.jar $(sudo minikube ip) 9999 create
     ```
 
-- Session operation is work-in-progress
+- Start a session to server
+    ```
+    $ java -jar target/client.jar $(sudo minikube ip) 30088 session
+    ```
 
 - Delete the sample app on server
     ```
