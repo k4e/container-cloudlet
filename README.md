@@ -95,20 +95,20 @@
 
 - Create a sample app on server
     ```
-    $ java -jar target/client.jar $(sudo minikube ip) 9999 create
+    $ java -jar target/client.jar create $(sudo minikube ip) 9999
     ```
 
 - Start a session to server
     ```
-    $ java -jar target/client.jar $(sudo minikube ip) 30088 sesh
+    $ java -jar target/client.jar sesh $(sudo minikube ip) 30088
     ```
 
 - Start a session to server A via server B
     ```
-    $ java -jar target/client.jar <B-ipaddr> 30088 sesh -f <A-ipaddr>:30088
+    $ java -jar target/client.jar sesh <B-ipaddr> 30088 -f <A-ipaddr>:30088
     ```
 
 - Delete the sample app on server
     ```
-    $ java -jar target/client.jar $(sudo minikube ip) 9999 delete
+    $ java -jar target/client.jar delete $(sudo minikube ip) 9999
     ```

@@ -46,6 +46,7 @@ func (p *SessionPool) Accept(ln net.Listener, network, appAddr string) error {
 		}
 		return nil
 	}
+	Logger.Debug("Accept: " + clientConn.RemoteAddr().String())
 	head, err := ReadProtocolHeader(clientConn)
 	if err != nil {
 		clientConn.Close()
@@ -53,7 +54,7 @@ func (p *SessionPool) Accept(ln net.Listener, network, appAddr string) error {
 	}
 	Logger.Debug("Header: " + head.String())
 	var hostAddr string
-	isFwd := false
+	isHostFwd := false
 	fwdIp := head.DstIP
 	fwdPort := head.DstPort
 	if net.IPv4(0, 0, 0, 0).Equal(fwdIp) {
@@ -66,7 +67,7 @@ func (p *SessionPool) Accept(ln net.Listener, network, appAddr string) error {
 			return errors.New(fmt.Sprintf("missing port in address (HostAddr=%s)", hostAddr))
 		}
 		hostAddr = fmt.Sprintf("%s:%d", fwdIp.String(), fwdPort)
-		isFwd = true
+		isHostFwd = true
 	}
 	if hostAddr == "" {
 		return errors.New("HostAddr is empty")
@@ -79,8 +80,14 @@ func (p *SessionPool) Accept(ln net.Listener, network, appAddr string) error {
 		Logger.Debug("Use existing session")
 	}
 	var headBytes []byte
-	if isFwd {
-		headBytes = head.Bytes()
+	if isHostFwd {
+		nextHead := ProtocolHeader{
+			SessionId: head.SessionId,
+			DstIP:     net.IPv4(0, 0, 0, 0),
+			DstPort:   0,
+			Flag:      head.Flag,
+		}
+		headBytes = nextHead.Bytes()
 	}
 	go sesh.(*Session).Start(clientConn, network, hostAddr, head.Resume(), headBytes)
 	return nil

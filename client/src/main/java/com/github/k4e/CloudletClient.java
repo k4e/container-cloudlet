@@ -11,7 +11,7 @@ public class CloudletClient {
     public static void create(String host, int port, boolean createApp) throws IOException {
         Request req = Request.create(
             new Request.Create("app-sample", createApp, "k4edev/app-sample:latest", 8888, 30088,
-                ImmutableMap.of("SLEEP_MS", "5000"))
+                ImmutableMap.of("SLEEP_MS", "0"))
         );
         send(host, port, req);
     }
