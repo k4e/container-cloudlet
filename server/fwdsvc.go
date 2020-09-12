@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 )
@@ -52,9 +51,9 @@ func (p *ForwardingService) routine() {
 	} else {
 		dest = "?"
 	}
-	fmt.Printf("Forwarding open: client=%s <--> %s\n", p.clientAddr, dest)
+	Logger.InfoF("Forwarding open: client=%s <--> %s\n", p.clientAddr, dest)
 	defer func() {
-		fmt.Printf("Forwarding closed: client=%s <--> %s\n", p.clientAddr, dest)
+		Logger.InfoF("Forwarding closed: client=%s <--> %s\n", p.clientAddr, dest)
 	}()
 	for {
 		brk := false
@@ -65,7 +64,7 @@ func (p *ForwardingService) routine() {
 			break
 		}
 		if err := p.sp.Accept(p.ln, p.network, p.appAddr); err != nil {
-			PrintError(err)
+			Logger.ErrorE(err)
 		}
 	}
 }

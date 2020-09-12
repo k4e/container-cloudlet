@@ -15,9 +15,13 @@ const timeout = 30
 var fwdsvcs sync.Map
 
 func main() {
+	for _, arg := range os.Args[1:] {
+		if arg == "-v" {
+			Logger.SetVerbosity(true)
+		}
+	}
 	fmt.Println("Interface IP addresses ...")
 	PrintInterfaceAddrs()
-
 	ln, err := net.Listen("tcp", local_addr)
 	if err != nil {
 		panic(err)
@@ -25,7 +29,7 @@ func main() {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			Logger.ErrorE(err)
 			continue
 		}
 		go handleConnection(conn)
@@ -34,21 +38,21 @@ func main() {
 
 func handleConnection(conn net.Conn) {
 	defer func() {
-		fmt.Printf("Close: %v\n", conn.RemoteAddr())
+		Logger.InfoF("Close: %v\n", conn.RemoteAddr())
 		conn.Close()
 	}()
-	fmt.Printf("Accept: %v\n", conn.RemoteAddr())
+	Logger.InfoF("Accept: %v\n", conn.RemoteAddr())
 	conn.SetReadDeadline(time.Now().Add(timeout * time.Second))
 	var bReq []byte
 	bReq, err := Readline(conn)
 	if err != nil {
-		PrintError(err)
+		Logger.ErrorE(err)
 		return
 	}
-	fmt.Println("Request: " + string(bReq))
+	Logger.Info("Request: " + string(bReq))
 	var req Request
 	if err := json.Unmarshal(bReq, &req); err != nil {
-		PrintError(err)
+		Logger.ErrorE(err)
 		return
 	}
 	switch req.Op {
@@ -73,7 +77,7 @@ func doCreate(req *Request) {
 	clusterIpName := req.Create.Name + "-cip"
 	clientset, err := NewClient()
 	if err != nil {
-		PrintError(err)
+		Logger.ErrorE(err)
 		return
 	}
 	clusterIP := ""
@@ -87,12 +91,12 @@ func doCreate(req *Request) {
 			port,
 			env,
 		); err == nil {
-			fmt.Println("Created pod: " + pod.GetName())
+			Logger.Info("Created pod: " + pod.GetName())
 		} else {
-			PrintError(err)
+			Logger.ErrorE(err)
 		}
 		if svc, err := GetService(clientset, serviceName); err == nil && svc.Spec.ClusterIP != "" {
-			fmt.Println("Use existing service: " + svc.GetName())
+			Logger.Info("Use existing service: " + svc.GetName())
 			clusterIP = svc.Spec.ClusterIP
 		} else if svc, err := CreateService(
 			clientset,
@@ -101,14 +105,14 @@ func doCreate(req *Request) {
 			clusterIpName,
 			port,
 		); err == nil {
-			fmt.Println("Created service: " + svc.GetName())
+			Logger.Info("Created service: " + svc.GetName())
 			clusterIP = svc.Spec.ClusterIP
 		} else {
-			PrintError(err)
+			Logger.ErrorE(err)
 		}
 	}
 	if _, ok := fwdsvcs.Load(name); ok {
-		fmt.Println("Use existing forwarding service")
+		Logger.Info("Use existing forwarding service")
 	} else if !req.Create.CreateApp || clusterIP != "" {
 		clientAddr := fmt.Sprintf(":%d", extPort)
 		var appAddr string
@@ -118,10 +122,10 @@ func doCreate(req *Request) {
 		if f, err := StartForwardingService("tcp", clientAddr, appAddr); err == nil {
 			fwdsvcs.Store(name, f)
 		} else {
-			PrintError(err)
+			Logger.ErrorE(err)
 		}
 	} else {
-		PrintErrorS("Error: forwarding service cannot not started because ClusterIP is unknown")
+		Logger.Error("Error: forwarding service cannot not started because ClusterIP is unknown")
 	}
 }
 
@@ -131,35 +135,27 @@ func doDelete(req *Request) {
 	serviceName := req.Delete.Name + "-svc"
 	clientset, err := NewClient()
 	if err != nil {
-		PrintError(err)
+		Logger.ErrorE(err)
 		return
 	}
 	if v, ok := fwdsvcs.Load(name); ok {
 		if err := v.(*ForwardingService).Close(); err != nil {
-			PrintError(err)
+			Logger.ErrorE(err)
 		}
 		fwdsvcs.Delete(name)
 	}
 	if err := DeleteService(clientset, serviceName); err == nil {
-		fmt.Println("Deleted service: " + serviceName)
+		Logger.Info("Deleted service: " + serviceName)
 	} else {
-		PrintError(err)
+		Logger.ErrorE(err)
 	}
 	if err := DeletePod(clientset, podName); err == nil {
-		fmt.Println("Deleted pod: " + podName)
+		Logger.Info("Deleted pod: " + podName)
 	} else {
-		PrintError(err)
+		Logger.ErrorE(err)
 	}
 }
 
 func doUnsupported(req *Request) {
-	PrintErrorS("Unsupported operation")
-}
-
-func PrintError(e error) {
-	fmt.Fprintf(os.Stderr, "%v\n", e)
-}
-
-func PrintErrorS(s string) {
-	fmt.Fprintln(os.Stderr, s)
+	Logger.Error("Unsupported operation")
 }

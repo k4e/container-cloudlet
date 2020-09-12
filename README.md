@@ -89,7 +89,7 @@
 
 1. `cd container-cloudlet/server`
 
-1. Run `go run .`
+1. Run `go run . -v`
 
 ### Client
 

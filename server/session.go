@@ -5,7 +5,6 @@ package main
   - Session.Start() のロック内での Dial() や Close() は時間がかかりすぎるので回避する
   - Session.upstream() と downstream() が終了するとき、
     Session のメンバーではなく関数内でローカルの net.Conn をクローズする
-  - ログのユーティリティクラスを作り、fmt.Println を置き換える
   - クライアントを二重にクローズする問題を解決する
 */
 
@@ -14,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -53,15 +51,14 @@ func (p *SessionPool) Accept(ln net.Listener, network, appAddr string) error {
 		clientConn.Close()
 		return err
 	}
-	fmt.Println("Header: " + head.String())
+	Logger.Debug("Header: " + head.String())
 	var hostAddr string
 	isFwd := false
 	fwdIp := head.DstIP
 	fwdPort := head.DstPort
 	if net.IPv4(0, 0, 0, 0).Equal(fwdIp) {
 		if appAddr == "" {
-			fmt.Fprintln(os.Stderr,
-				"Fatal: 'only-forwarding' mode requires dstIP:dstPort on a header")
+			Logger.Warn("Fatal: requires dstIP:dstPort on a header because the app isn't created")
 		}
 		hostAddr = appAddr
 	} else {
@@ -77,9 +74,9 @@ func (p *SessionPool) Accept(ln net.Listener, network, appAddr string) error {
 	key := SessionKey{head.SessionId, hostAddr}
 	sesh, ok := p.ssss.LoadOrStore(key, &Session{keep: true})
 	if !ok {
-		fmt.Println("New session")
+		Logger.Debug("New session")
 	} else {
-		fmt.Println("Use existing session")
+		Logger.Debug("Use existing session")
 	}
 	var headBytes []byte
 	if isFwd {
@@ -122,10 +119,10 @@ func (p *Session) Start(
 	if !p.hostOpen {
 		conn, err := net.Dial(network, hostAddr)
 		if err != nil {
-			PrintError(err)
+			Logger.ErrorE(err)
 			return
 		} else {
-			fmt.Println("Host open")
+			Logger.Debug("Host open")
 		}
 		p.hostConn = conn
 		p.hostOpen = true
@@ -133,7 +130,7 @@ func (p *Session) Start(
 	}
 	if p.clientOpen {
 		if err := p.clientConn.Close(); err != nil {
-			PrintError(err)
+			Logger.ErrorE(err)
 		}
 		p.clientOpen = false
 	}
@@ -147,17 +144,17 @@ func (p *Session) Close() {
 	p.mux.Lock()
 	if p.hostOpen {
 		if err := p.hostConn.Close(); err != nil {
-			PrintError(err)
+			Logger.ErrorE(err)
 		} else {
-			fmt.Println("Host closed")
+			Logger.Debug("Host closed")
 		}
 		p.hostOpen = false
 	}
 	if p.clientOpen {
 		if err := p.clientConn.Close(); err != nil {
-			PrintError(err)
+			Logger.ErrorE(err)
 		} else {
-			fmt.Println("Client closed")
+			Logger.Debug("Client closed")
 		}
 		p.clientOpen = false
 	}
@@ -185,12 +182,12 @@ func (p *Session) stream() {
 	defer p.muxStream.Unlock()
 	p.muxStream.Lock()
 	if !p.streaming {
-		fmt.Println("New streaming")
+		Logger.Debug("New streaming")
 		go p.upstream()
 		go p.downstream()
 		p.streaming = true
 	} else {
-		fmt.Println("Use existing streaming")
+		Logger.Debug("Use existing streaming")
 	}
 }
 
@@ -203,7 +200,7 @@ func (p *Session) finishStream() {
 
 func (p *Session) upstream() {
 	defer func() {
-		fmt.Println("Finish upstream")
+		Logger.Debug("Finish upstream")
 		p.finishStream()
 	}()
 	buf := make([]byte, BufSize)
@@ -212,15 +209,15 @@ func (p *Session) upstream() {
 		clientConn, _ := p.getClientConn()
 		n, cErr := clientConn.Read(buf)
 		if n > 0 {
-			fmt.Printf("upstream: Read %dB: %s", n, buf[:n])
+			Logger.DebugF("upstream: Read %dB: %s", n, buf[:n])
 			hostConn, _ := p.getHostConn()
 			m, hErr := hostConn.Write(buf[:n])
 			if n != m {
-				PrintErrorS(fmt.Sprintf("upstream: Read: %dB, Write: %dB", n, m))
+				Logger.WarnF("upstream: Read: %dB, Write: %dB", n, m)
 			}
 			if hErr != nil {
 				if !IsClosedError(hErr) {
-					PrintError(hErr)
+					Logger.ErrorE(hErr)
 				}
 				return
 			}
@@ -230,15 +227,15 @@ func (p *Session) upstream() {
 			if eof || IsClosedError(cErr) {
 				if eof {
 					if err := clientConn.Close(); err != nil {
-						PrintError(err)
+						Logger.ErrorE(err)
 					} else {
-						fmt.Println("Client closed")
+						Logger.Debug("Client closed")
 					}
 				}
 				first := !ct.isRunning()
 				if p.keep && ct.runContinue() {
 					if first {
-						fmt.Println("upstream: reconnect waiting")
+						Logger.Debug("upstream: reconnect waiting")
 					}
 					sleep()
 					continue
@@ -246,7 +243,7 @@ func (p *Session) upstream() {
 					return
 				}
 			} else {
-				PrintError(cErr)
+				Logger.ErrorE(cErr)
 				return
 			}
 		}
@@ -256,7 +253,7 @@ func (p *Session) upstream() {
 
 func (p *Session) downstream() {
 	defer func() {
-		fmt.Println("Finish downstream")
+		Logger.Debug("Finish downstream")
 		p.finishStream()
 	}()
 	buf := make([]byte, BufSize)
@@ -269,14 +266,14 @@ func (p *Session) downstream() {
 				clientConn, _ := p.getClientConn()
 				m, cErr := clientConn.Write(buf[:n])
 				if cErr == nil {
-					fmt.Printf("downstream: Write %dB: %s\n", m, buf[:m])
+					Logger.DebugF("downstream: Write %dB: %s\n", m, buf[:m])
 					break
 				} else {
 					if IsClosedError(cErr) {
 						first := !ct.isRunning()
 						if p.keep && ct.runContinue() {
 							if first {
-								fmt.Println("downstream: reconnect waiting")
+								Logger.Debug("downstream: reconnect waiting")
 							}
 							sleep()
 							continue
@@ -284,7 +281,7 @@ func (p *Session) downstream() {
 							return
 						}
 					} else {
-						PrintError(cErr)
+						Logger.ErrorE(cErr)
 						return
 					}
 				}
@@ -293,7 +290,7 @@ func (p *Session) downstream() {
 		}
 		if hErr != nil {
 			if hErr != io.EOF && !IsClosedError(hErr) {
-				PrintError(hErr)
+				Logger.ErrorE(hErr)
 			}
 			return
 		}
