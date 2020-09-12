@@ -61,6 +61,7 @@
 
 1. Build docker image
     ```
+    $ cd container-cloudlet/app
     $ docker build -t <username>/app-sample:latest .
     ```
 
@@ -99,7 +100,12 @@
 
 - Start a session to server
     ```
-    $ java -jar target/client.jar $(sudo minikube ip) 30088 session
+    $ java -jar target/client.jar $(sudo minikube ip) 30088 sesh
+    ```
+
+- Start a session to server A via server B
+    ```
+    $ java -jar target/client.jar <B-ipaddr> 30088 sesh -f <A-ipaddr>:30088
     ```
 
 - Delete the sample app on server

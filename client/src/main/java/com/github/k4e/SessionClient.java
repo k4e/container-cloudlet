@@ -13,9 +13,10 @@ import com.github.k4e.types.ProtocolHeader;
 
 public class SessionClient {
 
-    public static SessionClient of(String host, int port, UUID sessionId, String fwdHostIp, boolean resume)
+    public static SessionClient of(String host, int port, UUID sessionId,
+            String fwdHostIp, short fwdHostPort, boolean resume)
     throws UnknownHostException {
-        ProtocolHeader header = ProtocolHeader.create(sessionId, fwdHostIp, resume);
+        ProtocolHeader header = ProtocolHeader.create(sessionId, fwdHostIp, fwdHostPort, resume);
         return new SessionClient(host, port, header);
     }
 

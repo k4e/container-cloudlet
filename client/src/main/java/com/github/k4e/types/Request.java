@@ -17,12 +17,15 @@ public class Request implements Serializable {
     public static class Create implements Serializable {
         private static final long serialVersionUID = -204586336929613360L;
         public String name;
+        public Boolean createApp;
         public String image;
         public Integer port;
         public Integer extPort;
         public Map<String, String> env;
-        public Create(String name, String image, int port, int extPort, Map<String, String> env) {
+        public Create(String name, boolean createApp, String image, int port, int extPort,
+                Map<String, String> env) {
             this.name = name;
+            this.createApp = createApp;
             this.image = image;
             this.port = port;
             this.extPort = extPort;

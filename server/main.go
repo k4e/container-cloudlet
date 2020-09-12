@@ -63,6 +63,7 @@ func handleConnection(conn net.Conn) {
 
 func doCreate(req *Request) {
 	name := req.Create.Name
+	image := req.Create.Image
 	podName := req.Create.Name + "-pod"
 	containerName := req.Create.Name + "-c"
 	port := int32(req.Create.Port)
@@ -75,40 +76,45 @@ func doCreate(req *Request) {
 		PrintError(err)
 		return
 	}
-	if pod, err := CreatePod(
-		clientset,
-		podName,
-		name,
-		containerName,
-		req.Create.Image,
-		port,
-		env,
-	); err == nil {
-		fmt.Println("Created pod: " + pod.GetName())
-	} else {
-		PrintError(err)
-	}
 	clusterIP := ""
-	if svc, err := GetService(clientset, serviceName); err == nil && svc.Spec.ClusterIP != "" {
-		fmt.Println("Use existing service: " + svc.GetName())
-		clusterIP = svc.Spec.ClusterIP
-	} else if svc, err := CreateService(
-		clientset,
-		serviceName,
-		name,
-		clusterIpName,
-		port,
-	); err == nil {
-		fmt.Println("Created service: " + svc.GetName())
-		clusterIP = svc.Spec.ClusterIP
-	} else {
-		PrintError(err)
+	if req.Create.CreateApp {
+		if pod, err := CreatePod(
+			clientset,
+			podName,
+			name,
+			containerName,
+			image,
+			port,
+			env,
+		); err == nil {
+			fmt.Println("Created pod: " + pod.GetName())
+		} else {
+			PrintError(err)
+		}
+		if svc, err := GetService(clientset, serviceName); err == nil && svc.Spec.ClusterIP != "" {
+			fmt.Println("Use existing service: " + svc.GetName())
+			clusterIP = svc.Spec.ClusterIP
+		} else if svc, err := CreateService(
+			clientset,
+			serviceName,
+			name,
+			clusterIpName,
+			port,
+		); err == nil {
+			fmt.Println("Created service: " + svc.GetName())
+			clusterIP = svc.Spec.ClusterIP
+		} else {
+			PrintError(err)
+		}
 	}
 	if _, ok := fwdsvcs.Load(name); ok {
 		fmt.Println("Use existing forwarding service")
-	} else if clusterIP != "" {
+	} else if !req.Create.CreateApp || clusterIP != "" {
 		clientAddr := fmt.Sprintf(":%d", extPort)
-		appAddr := fmt.Sprintf("%s:%d", clusterIP, port)
+		var appAddr string
+		if clusterIP != "" {
+			appAddr = fmt.Sprintf("%s:%d", clusterIP, port)
+		}
 		if f, err := StartForwardingService("tcp", clientAddr, appAddr); err == nil {
 			fwdsvcs.Store(name, f)
 		} else {

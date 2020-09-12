@@ -6,12 +6,15 @@ package main
   - Session.upstream() と downstream() が終了するとき、
     Session のメンバーではなく関数内でローカルの net.Conn をクローズする
   - ログのユーティリティクラスを作り、fmt.Println を置き換える
+  - クライアントを二重にクローズする問題を解決する
 */
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -52,19 +55,37 @@ func (p *SessionPool) Accept(ln net.Listener, network, appAddr string) error {
 	}
 	fmt.Println("Header: " + head.String())
 	var hostAddr string
-	if net.IPv4(0, 0, 0, 0).Equal(head.hostIP) {
+	isFwd := false
+	fwdIp := head.DstIP
+	fwdPort := head.DstPort
+	if net.IPv4(0, 0, 0, 0).Equal(fwdIp) {
+		if appAddr == "" {
+			fmt.Fprintln(os.Stderr,
+				"Fatal: 'only-forwarding' mode requires dstIP:dstPort on a header")
+		}
 		hostAddr = appAddr
 	} else {
-		hostAddr = head.hostIP.String()
+		if fwdPort == 0 {
+			return errors.New(fmt.Sprintf("missing port in address (HostAddr=%s)", hostAddr))
+		}
+		hostAddr = fmt.Sprintf("%s:%d", fwdIp.String(), fwdPort)
+		isFwd = true
 	}
-	key := SessionKey{head.sessionId, hostAddr}
+	if hostAddr == "" {
+		return errors.New("HostAddr is empty")
+	}
+	key := SessionKey{head.SessionId, hostAddr}
 	sesh, ok := p.ssss.LoadOrStore(key, &Session{keep: true})
 	if !ok {
 		fmt.Println("New session")
 	} else {
 		fmt.Println("Use existing session")
 	}
-	go sesh.(*Session).Start(clientConn, network, hostAddr, head.Resume())
+	var headBytes []byte
+	if isFwd {
+		headBytes = head.Bytes()
+	}
+	go sesh.(*Session).Start(clientConn, network, hostAddr, head.Resume(), headBytes)
 	return nil
 }
 
@@ -84,10 +105,15 @@ func (p *Session) Start(
 	network string,
 	hostAddr string,
 	resume bool,
+	headBytes []byte,
 ) {
 	complete := false
+	newHostConn := false
 	defer func() {
 		p.mux.Unlock()
+		if newHostConn && len(headBytes) > 0 {
+			p.hostConn.Write(headBytes)
+		}
 		if complete {
 			go p.stream()
 		}
@@ -98,9 +124,12 @@ func (p *Session) Start(
 		if err != nil {
 			PrintError(err)
 			return
+		} else {
+			fmt.Println("Host open")
 		}
 		p.hostConn = conn
 		p.hostOpen = true
+		newHostConn = true
 	}
 	if p.clientOpen {
 		if err := p.clientConn.Close(); err != nil {
@@ -116,15 +145,19 @@ func (p *Session) Start(
 func (p *Session) Close() {
 	defer p.mux.Unlock()
 	p.mux.Lock()
-	if p.clientOpen {
-		if err := p.clientConn.Close(); err != nil {
+	if p.hostOpen {
+		if err := p.hostConn.Close(); err != nil {
 			PrintError(err)
+		} else {
+			fmt.Println("Host closed")
 		}
-		p.clientOpen = false
+		p.hostOpen = false
 	}
 	if p.clientOpen {
 		if err := p.clientConn.Close(); err != nil {
 			PrintError(err)
+		} else {
+			fmt.Println("Client closed")
 		}
 		p.clientOpen = false
 	}
@@ -179,6 +212,7 @@ func (p *Session) upstream() {
 		clientConn, _ := p.getClientConn()
 		n, cErr := clientConn.Read(buf)
 		if n > 0 {
+			fmt.Printf("upstream: Read %dB: %s", n, buf[:n])
 			hostConn, _ := p.getHostConn()
 			m, hErr := hostConn.Write(buf[:n])
 			if n != m {
@@ -197,6 +231,8 @@ func (p *Session) upstream() {
 				if eof {
 					if err := clientConn.Close(); err != nil {
 						PrintError(err)
+					} else {
+						fmt.Println("Client closed")
 					}
 				}
 				first := !ct.isRunning()
@@ -204,7 +240,7 @@ func (p *Session) upstream() {
 					if first {
 						fmt.Println("upstream: reconnect waiting")
 					}
-					p.sleep()
+					sleep()
 					continue
 				} else {
 					return
@@ -231,8 +267,9 @@ func (p *Session) downstream() {
 		if n > 0 {
 			for {
 				clientConn, _ := p.getClientConn()
-				_, cErr := clientConn.Write(buf[:n])
+				m, cErr := clientConn.Write(buf[:n])
 				if cErr == nil {
+					fmt.Printf("downstream: Write %dB: %s\n", m, buf[:m])
 					break
 				} else {
 					if IsClosedError(cErr) {
@@ -241,7 +278,7 @@ func (p *Session) downstream() {
 							if first {
 								fmt.Println("downstream: reconnect waiting")
 							}
-							p.sleep()
+							sleep()
 							continue
 						} else {
 							return
@@ -253,7 +290,6 @@ func (p *Session) downstream() {
 				}
 			}
 			ct.reset()
-			fmt.Println("Wrote to client")
 		}
 		if hErr != nil {
 			if hErr != io.EOF && !IsClosedError(hErr) {
@@ -264,7 +300,7 @@ func (p *Session) downstream() {
 	}
 }
 
-func (p *Session) sleep() {
+func sleep() {
 	time.Sleep(RetryInterval)
 }
 

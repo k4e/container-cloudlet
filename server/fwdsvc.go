@@ -46,9 +46,15 @@ func (p *ForwardingService) Close() error {
 }
 
 func (p *ForwardingService) routine() {
-	fmt.Printf("Forwarding open: client=%s, app=%s\n", p.clientAddr, p.appAddr)
+	var dest string
+	if p.appAddr != "" {
+		dest = "app=" + p.appAddr
+	} else {
+		dest = "?"
+	}
+	fmt.Printf("Forwarding open: client=%s <--> %s\n", p.clientAddr, dest)
 	defer func() {
-		fmt.Printf("Forwarding closed: client=%s, app=%s\n", p.clientAddr, p.appAddr)
+		fmt.Printf("Forwarding closed: client=%s <--> %s\n", p.clientAddr, dest)
 	}()
 	for {
 		brk := false

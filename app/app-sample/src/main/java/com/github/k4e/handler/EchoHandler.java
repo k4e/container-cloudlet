@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.util.Arrays;
 
 public class EchoHandler extends Handler {
     
@@ -30,7 +31,8 @@ public class EchoHandler extends Handler {
                 if (sleepMs > 0) {
                     Thread.sleep(sleepMs);
                 }
-                writer.print(buf);
+                char[] output = Arrays.copyOfRange(buf, 0, count);
+                writer.print(output);
                 writer.flush();
             }
         } catch (IOException e) {

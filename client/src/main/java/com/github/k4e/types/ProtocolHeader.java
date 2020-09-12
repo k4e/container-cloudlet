@@ -3,6 +3,7 @@ package com.github.k4e.types;
 import java.net.Inet4Address;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.UUID;
 
 import com.google.common.base.Strings;
@@ -10,18 +11,19 @@ import com.google.common.primitives.Bytes;
 
 public class ProtocolHeader {
 
-    public static final int HEADER_SIZE = 21;
+    public static final int HEADER_SIZE = 23;
     public static final byte FLAG_RESUME = 0x1;
 
-    public static ProtocolHeader create(UUID sessionId, String hostIP, boolean resume)
+    public static ProtocolHeader create(UUID sessionId, String dstIP, short dstPort, boolean resume)
     throws UnknownHostException {
-        if (Strings.isNullOrEmpty(hostIP)) {
-            hostIP = "0.0.0.0";
+        if (Strings.isNullOrEmpty(dstIP)) {
+            dstIP = "0.0.0.0";
         }
         byte[] bClientId = uuidToBytes(sessionId);
-        byte[] bHostIP = ipv4ToBytes(hostIP);
+        byte[] bHostIP = ipv4ToBytes(dstIP);
+        byte[] bPort = shortToBytesBigEndian(dstPort);
         byte[] bFlag = createFlag(resume);
-        return new ProtocolHeader(bClientId, bHostIP, bFlag);
+        return new ProtocolHeader(bClientId, bHostIP, bPort, bFlag);
     }
 
     public static byte[] uuidToBytes(UUID uuid) {
@@ -42,6 +44,12 @@ public class ProtocolHeader {
         return Inet4Address.getByName(ipv4).getAddress();
     }
 
+    public static byte[] shortToBytesBigEndian(short h) {
+        byte b0 = (byte)((h >> 8) & 0xff);
+        byte b1 = (byte)(h & 0xff);
+        return new byte[] { b0 , b1 };
+    }
+
     public static byte[] createFlag(boolean resume) {
         byte[] ans = new byte[] { 0x0 };
         if (resume) {
@@ -51,17 +59,19 @@ public class ProtocolHeader {
     }
 
     private final byte[] sessionId;
-    private final byte[] hostIP;
+    private final byte[] dstIP;
+    private final byte[] dstPort;
     private final byte[] flag;
 
-    public ProtocolHeader(byte[] sessionId, byte[] hostIP, byte[] flag) {
+    public ProtocolHeader(byte[] sessionId, byte[] dstIP, byte[] dstPort, byte[] flag) {
         this.sessionId = sessionId;
-        this.hostIP = hostIP;
+        this.dstIP = dstIP;
+        this.dstPort = dstPort;
         this.flag = flag;
     }
 
     public byte[] getBytes() throws IllegalStateException {
-        byte[] ans = Bytes.concat(sessionId, hostIP, flag);
+        byte[] ans = Bytes.concat(sessionId, dstIP, dstPort, flag);
         int len = ans.length;
         if (len != HEADER_SIZE) {
             throw new IllegalStateException(String.format("Unexpected header size: %d", len));
@@ -75,8 +85,10 @@ public class ProtocolHeader {
         Long uuidHigh = uuidBB.getLong();
         Long uuidLow = uuidBB.getLong();
         String sSessionId = new UUID(uuidHigh, uuidLow).toString();
-        String sHostIP = String.format("%d.%d.%d.%d", hostIP[0], hostIP[1], hostIP[2], hostIP[3]);
+        String sIP = String.format("%d.%d.%d.%d",
+                dstIP[0] & 0xff, dstIP[1] & 0xff, dstIP[2] & 0xff, dstIP[3] & 0xff);
+        String sPort = Short.toString(ByteBuffer.wrap(dstPort).order(ByteOrder.BIG_ENDIAN).getShort());
         String sFlag = String.format("%02x", flag[0]);
-        return String.format("sessionId=%s, hostIP=%s, flag=%s", sSessionId, sHostIP, sFlag);
+        return String.format("sessionId=%s, hostIP=%s, port=%s, flag=%s", sSessionId, sIP, sPort, sFlag);
     }
 }
