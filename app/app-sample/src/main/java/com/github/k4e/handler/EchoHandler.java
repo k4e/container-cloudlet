@@ -8,6 +8,8 @@ import java.util.Arrays;
 
 public class EchoHandler extends Handler {
     
+    private static final int BUF_SIZE = 1024 * 1024;
+
     private final int sleepMs;
 
     public EchoHandler(Socket sock, int sleepMs) {
@@ -17,17 +19,16 @@ public class EchoHandler extends Handler {
 
     @Override
     public void run() {
+        char[] buf = new char[BUF_SIZE];
         try {
             System.out.printf("[Accepted %s]\n", getSocket().getInetAddress());
             InputStreamReader reader = new InputStreamReader(getSocket().getInputStream());
             PrintWriter writer = new PrintWriter(getSocket().getOutputStream());
             while (!getSocket().isClosed()) {
-                char[] buf = new char[4096];
                 int count = reader.read(buf);
                 if (count < 1) {
                     break;
                 }
-                System.out.print(new String(buf, 0, count));
                 if (sleepMs > 0) {
                     Thread.sleep(sleepMs);
                 }

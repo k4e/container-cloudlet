@@ -114,10 +114,21 @@ func doCreate(req *Request) {
 	if _, ok := fwdsvcs.Load(name); ok {
 		Logger.Info("Use existing forwarding service")
 	} else if !req.Create.CreateApp || clusterIP != "" {
-		clientAddr := fmt.Sprintf(":%d", extPort)
-		var appAddr string
+		var clientAddr *net.TCPAddr
+		var appAddr *net.TCPAddr
+		clientAddrStr := fmt.Sprintf(":%d", extPort)
+		var rErr error
+		clientAddr, rErr = net.ResolveTCPAddr("tcp", clientAddrStr);
+		if rErr != nil {
+			Logger.ErrorE(err)
+		}
 		if clusterIP != "" {
-			appAddr = fmt.Sprintf("%s:%d", clusterIP, port)
+			appAddrStr := fmt.Sprintf("%s:%d", clusterIP, port)
+			var err error
+			appAddr, err = net.ResolveTCPAddr("tcp", appAddrStr)
+			if err != nil {
+				Logger.ErrorE(err)
+			}
 		}
 		if f, err := StartForwardingService("tcp", clientAddr, appAddr); err == nil {
 			fwdsvcs.Store(name, f)
