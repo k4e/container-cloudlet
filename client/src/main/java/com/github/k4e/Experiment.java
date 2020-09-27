@@ -18,8 +18,14 @@ public class Experiment {
         this.seshId = seshId;
     }
 
-    public void exec(String hostA, int portA, String hostB, int portB, int dataSizeKB)
-    throws IOException {
+    public void exec(
+        String hostA,
+        int portA,
+        String hostB,
+        int portB,
+        int dataSizeKB,
+        boolean fullCheck
+    ) throws IOException {
         final int dataSizeBytes = dataSizeKB * 1024;
         byte[] data = generateBytes(dataSizeBytes);
         byte[] buf = new byte[dataSizeBytes * 4];
@@ -27,13 +33,25 @@ public class Experiment {
         ProtocolHeader headerA = ProtocolHeader.create(seshId, null, (short)0, false);
         ProtocolHeader headerB = ProtocolHeader.create(seshId, hostA, (short)portA, false);
         System.out.println("# --> Server A");
-        routine(hostA, portA, headerA, data, buf);
+        routine(hostA, portA, headerA, data, buf, fullCheck);
+        System.out.println("Wait for 4 sec");
+        try {
+            Thread.sleep(4000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
         System.out.println("# --> Server B");
-        routine(hostB, portB, headerB, data, buf);
+        routine(hostB, portB, headerB, data, buf, fullCheck);
     }
 
-    private void routine(String host, int port, ProtocolHeader header, byte[] data, byte[] buf)
-    throws IOException {
+    private void routine(
+        String host,
+        int port,
+        ProtocolHeader header,
+        byte[] data,
+        byte[] buf,
+        boolean fullCheck
+    ) throws IOException {
         long start, end;
         int consistent = 0, inconsistent = 0;
         Socket sock = null;
@@ -76,8 +94,8 @@ public class Experiment {
                 }
                 boolean randomTest = true;
                 int upperBound = Math.min(readSz, wroteSz);
-                for (int t = 0; t < Math.min(100, upperBound); ++t) {
-                    int j = random.nextInt(upperBound);
+                for (int t = 0; t < (fullCheck ? upperBound : Math.min(100, upperBound)); ++t) {
+                    int j = (fullCheck ? t : random.nextInt(upperBound));
                     if (data[j] != buf[j]) {
                         randomTest = false;
                         System.out.printf("Random test failed: wrote[%d]=0x%x but read[%d]=0x%x\n",
@@ -92,7 +110,8 @@ public class Experiment {
                 }
             }
         } finally {
-            System.out.printf("Test result: consistent: %d, inconsistent: %d\n", consistent, inconsistent);
+            System.out.printf("Test result: consistent: %d, inconsistent: %d, full-check: %s\n",
+                    consistent, inconsistent, String.valueOf(fullCheck));
             if (sock != null) {
                 sock.close();
             }

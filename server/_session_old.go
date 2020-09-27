@@ -4,8 +4,9 @@ package main
   TODO:
   - Session.Start() のロック内での Dial() や Close() は時間がかかりすぎるので回避する
   - Session.upstream() と downstream() が終了するとき、
-    Session のメンバーではなく関数内でローカルの net.Conn をクローズする
-  - クライアントを二重にクローズする問題を解決する
+    Session のメンバーではなく関数内でローカルの net.Conn をクローズする ← なぜ？？
+  - （クライアントを二重にクローズする問題を解決したが、これで問題ないか？）
+  - stream の終了と Accept が同時に起こったときにどうなる？
 */
 /*
 import (
@@ -147,6 +148,7 @@ func (p *Session) Start(
 		if err := p.clientConn.Close(); err != nil {
 			Logger.ErrorE(err)
 		}
+		Logger.Info("Client closed; replacing old client connection")
 		p.clientOpen = false
 	}
 	p.clientConn = clientConn
@@ -215,17 +217,23 @@ func (p *Session) finishStream() {
 
 func (p *Session) upstream() {
 	defer func() {
-		Logger.Info("Finish upstream")
+		Logger.Info("upstream: finish")
 		p.finishStream()
 	}()
 	buf := make([]byte, BufSize)
 	ct := &CountdownTimer{Deadline: KeepSec}
 	for {
-		clientConn, _ := p.getClientConn()
+		clientConn, clientOpen := p.getClientConn()
+		if !clientOpen {
+			return
+		}
 		n, cErr := clientConn.Read(buf)
 		if n > 0 {
 			Logger.DebugF("upstream: Read %dB: %s", n, buf[:n])
-			hostConn, _ := p.getHostConn()
+			hostConn, hostOpen := p.getHostConn()
+			if !hostOpen {
+				return
+			}
 			m, hErr := hostConn.Write(buf[:n])
 			if n != m {
 				Logger.WarnF("upstream: Read: %dB but Write: %dB\n", n, m)
@@ -240,13 +248,6 @@ func (p *Session) upstream() {
 		if cErr != nil {
 			eof := cErr == io.EOF
 			if eof || IsClosedError(cErr) {
-				if eof {
-					if err := clientConn.Close(); err != nil {
-						Logger.ErrorE(err)
-					} else {
-						Logger.Info("Client closed")
-					}
-				}
 				first := !ct.isRunning()
 				if p.keep && ct.runContinue() {
 					if first {
@@ -268,17 +269,23 @@ func (p *Session) upstream() {
 
 func (p *Session) downstream() {
 	defer func() {
-		Logger.Info("Finish downstream")
+		Logger.Info("downstream: finish")
 		p.finishStream()
 	}()
 	buf := make([]byte, BufSize)
 	ct := &CountdownTimer{Deadline: KeepSec}
 	for {
-		hostConn, _ := p.getHostConn()
+		hostConn, hostOpen := p.getHostConn()
+		if !hostOpen {
+			return
+		}
 		n, hErr := hostConn.Read(buf)
 		if n > 0 {
 			for {
-				clientConn, _ := p.getClientConn()
+				clientConn, clientOpen := p.getClientConn()
+				if !clientOpen {
+					return
+				}
 				m, cErr := clientConn.Write(buf[:n])
 				if cErr == nil {
 					Logger.DebugF("downstream: Write %dB: %s\n", m, buf[:m])
@@ -306,6 +313,8 @@ func (p *Session) downstream() {
 		if hErr != nil {
 			if hErr != io.EOF && !IsClosedError(hErr) {
 				Logger.ErrorE(hErr)
+			} else {
+				Logger.Info("downstream: host reached end")
 			}
 			return
 		}

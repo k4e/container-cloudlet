@@ -3,9 +3,7 @@ package main
 /*
   TODO:
   - Session.Start() のロック内での Dial() や Close() は時間がかかりすぎるので回避する
-  - Session.upstream() と downstream() が終了するとき、
-    Session のメンバーではなく関数内でローカルの net.Conn をクローズする ← なぜ？？
-  - （クライアントを二重にクローズする問題を解決したが、これで問題ないか？）
+  - hostConn の保持によるコネクションの維持を実現する
 */
 
 import (
@@ -13,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -21,16 +20,31 @@ import (
 )
 
 const KeepSec = 60.
+const TimeoutDuration = 1000 * time.Millisecond
 const RetryInterval = 1000 * time.Millisecond
-const BufSize = 1024 * 1024
+const BufferSize = 1024 * 1024
 
 func IsClosedError(e error) bool {
 	msg := "use of closed network connection"
 	return strings.Contains(e.Error(), msg)
 }
 
+func IsDeadlineExceeded(err error) bool {
+	nerr, ok := err.(net.Error)
+	if !ok {
+		return false
+	}
+	if !nerr.Timeout() {
+		return false
+	}
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		return false
+	}
+	return true
+}
+
 type SessionPool struct {
-	ssss sync.Map
+	seshs sync.Map
 }
 
 type SessionKey struct {
@@ -82,7 +96,7 @@ func (p *SessionPool) Accept(ln* net.TCPListener, network string, appAddr *net.T
 		return err
 	}
 	key := SessionKey{head.SessionId, hostAddr.IP.String(), hostAddr.Port}
-	sesh, ok := p.ssss.LoadOrStore(key, &Session{keep: true})
+	sesh, ok := p.seshs.LoadOrStore(key, NewSession(true))
 	if !ok {
 		Logger.Info("New session")
 	} else {
@@ -98,230 +112,261 @@ func (p *SessionPool) Accept(ln* net.TCPListener, network string, appAddr *net.T
 		}
 		headBytes = nextHead.Bytes()
 	}
-	go sesh.(*Session).Start(clientConn, network, hostAddr, head.Resume(), headBytes)
+	go sesh.(*Session).Start(NewConnection(clientConn), network, hostAddr,
+			head.Resume(), headBytes)
 	return nil
 }
 
 type Session struct {
-	keep       bool
-	mux        sync.Mutex
-	clientConn *net.TCPConn
-	hostConn   *net.TCPConn
-	clientOpen bool
-	hostOpen   bool
-	streaming  bool
-	muxStream  sync.Mutex
+	keep      bool
+	mux       sync.Mutex
+	hostConn  *Connection
+	muxStream sync.Mutex
+	upAlive   bool
+	upBuf     []byte
+	upBufLB   int
+	upBufUB   int
+	downAlive bool
+	downBuf   []byte
+	downBufLB int
+	downBufUB int
+}
+
+func NewSession(keep bool) *Session {
+	p := &Session{keep: true}
+	p.upBuf = make([]byte, BufferSize)
+	p.downBuf = make([]byte, BufferSize)
+	return p
 }
 
 func (p *Session) Start(
-	clientConn *net.TCPConn,
+	clientConn *Connection,
 	network    string,
 	hostAddr   *net.TCPAddr,
 	resume     bool,
 	headBytes  []byte,
 ) {
-	complete := false
-	newHostConn := false
+	p.setStreamsAlive(false)
 	defer func() {
 		p.mux.Unlock()
-		if newHostConn && len(headBytes) > 0 {
-			p.hostConn.Write(headBytes)
-		}
-		if complete {
-			go p.stream()
-		}
 	}()
 	p.mux.Lock()
-	if !p.hostOpen {
+	wg := &sync.WaitGroup{}
+	var hostConn *Connection
+	if true {
 		conn, err := net.DialTCP(network, nil, hostAddr)
 		if err != nil {
 			Logger.ErrorE(err)
 			return
 		}
 		Logger.Info("Host open")
-		p.hostConn = conn
-		p.hostOpen = true
-		newHostConn = true
-	}
-	if p.clientOpen {
-		if err := p.clientConn.Close(); err != nil {
-			Logger.ErrorE(err)
+		hostConn = NewConnection(conn)
+		if len(headBytes) > 0 {
+			hostConn.Write(headBytes)
 		}
-		Logger.Info("Client closed; replacing old client connection")
-		p.clientOpen = false
 	}
-	p.clientConn = clientConn
-	p.clientOpen = true
-	complete = true
+	p.setStreamsAlive(true)
+	wg.Add(2)
+	go p.upstream(clientConn, hostConn, wg)
+	go p.downstream(clientConn, hostConn, wg)
+	wg.Wait()
+	clientConn.Close()
+	hostConn.Close()
 }
 
-func (p *Session) Close() {
-	defer p.mux.Unlock()
-	p.mux.Lock()
-	if p.hostOpen {
-		if err := p.hostConn.Close(); err != nil {
-			Logger.ErrorE(err)
-		} else {
-			Logger.Info("Host closed")
-		}
-		p.hostOpen = false
-	}
-	if p.clientOpen {
-		if err := p.clientConn.Close(); err != nil {
-			Logger.ErrorE(err)
-		} else {
-			Logger.Info("Client closed")
-		}
-		p.clientOpen = false
-	}
-}
-
-func (p *Session) IsClosed() bool {
-	defer p.mux.Unlock()
-	p.mux.Lock()
-	return !p.clientOpen && !p.hostOpen
-}
-
-func (p *Session) getClientConn() (net.Conn, bool) {
-	defer p.mux.Unlock()
-	p.mux.Lock()
-	return p.clientConn, p.clientOpen
-}
-
-func (p *Session) getHostConn() (net.Conn, bool) {
-	defer p.mux.Unlock()
-	p.mux.Lock()
-	return p.hostConn, p.hostOpen
-}
-
-func (p *Session) stream() {
+func (p *Session) getStreamsAlive() bool {
 	defer p.muxStream.Unlock()
 	p.muxStream.Lock()
-	if !p.streaming {
-		Logger.Info("New streaming")
-		go p.upstream()
-		go p.downstream()
-		p.streaming = true
-	} else {
-		Logger.Info("Use existing streaming")
-	}
+	return p.upAlive && p.downAlive
 }
 
-func (p *Session) finishStream() {
+func (p *Session) setStreamsAlive(b bool) {
+	defer p.muxStream.Unlock()
 	p.muxStream.Lock()
-	p.streaming = false
-	p.muxStream.Unlock()
-	p.Close()
+	p.upAlive = b
+	p.downAlive = b
 }
 
-func (p *Session) upstream() {
+func (p *Session) setUpstreamAlive(b bool) {
+	defer p.muxStream.Unlock()
+	p.muxStream.Lock()
+	p.upAlive = b
+}
+
+func (p *Session) setDownstreamAlive(b bool) {
+	defer p.muxStream.Unlock()
+	p.muxStream.Lock()
+	p.downAlive = b
+}
+
+func (p *Session) upstream(clientConn, hostConn *Connection, wg *sync.WaitGroup) {
 	defer func() {
 		Logger.Info("upstream: finish")
-		p.finishStream()
+		p.setUpstreamAlive(false)
+		if wg != nil {
+			wg.Done()
+		}
 	}()
-	buf := make([]byte, BufSize)
-	ct := &CountdownTimer{Deadline: KeepSec}
-	for {
-		clientConn, clientOpen := p.getClientConn()
-		if !clientOpen {
-			return
+	// ct := &CountdownTimer{Deadline: KeepSec}
+	for p.getStreamsAlive() {
+		var cerr error
+		if p.upBufUB == 0 {
+			if err := clientConn.SetReadDeadline(time.Now().Add(TimeoutDuration)); err != nil {
+				Logger.Warn("Warning: clientConn.SetReadDeadline: " + err.Error())
+			}
+			p.upBufUB, cerr = clientConn.Read(p.upBuf)
+			p.upBufLB = 0
 		}
-		n, cErr := clientConn.Read(buf)
-		if n > 0 {
-			Logger.DebugF("upstream: Read %dB: %s", n, buf[:n])
-			hostConn, hostOpen := p.getHostConn()
-			if !hostOpen {
-				return
-			}
-			m, hErr := hostConn.Write(buf[:n])
-			if n != m {
-				Logger.WarnF("upstream: Read: %dB but Write: %dB\n", n, m)
-			}
-			if hErr != nil {
-				if !IsClosedError(hErr) {
-					Logger.ErrorE(hErr)
-				}
-				return
-			}
-		}
-		if cErr != nil {
-			eof := cErr == io.EOF
-			if eof || IsClosedError(cErr) {
-				first := !ct.isRunning()
-				if p.keep && ct.runContinue() {
-					if first {
-						Logger.Info("upstream: reconnect waiting")
-					}
-					sleep()
-					continue
-				} else {
+		if p.upBufUB > 0 {
+			for p.getStreamsAlive() {
+				if hostConn.IsClosed() {
 					return
 				}
-			} else {
-				Logger.ErrorE(cErr)
-				return
-			}
-		}
-		ct.reset()
-	}
-}
-
-func (p *Session) downstream() {
-	defer func() {
-		Logger.Info("downstream: finish")
-		p.finishStream()
-	}()
-	buf := make([]byte, BufSize)
-	ct := &CountdownTimer{Deadline: KeepSec}
-	for {
-		hostConn, hostOpen := p.getHostConn()
-		if !hostOpen {
-			return
-		}
-		n, hErr := hostConn.Read(buf)
-		if n > 0 {
-			for {
-				clientConn, clientOpen := p.getClientConn()
-				if !clientOpen {
-					return
+				if err := hostConn.SetWriteDeadline(time.Now().Add(TimeoutDuration)); err != nil {
+					Logger.Warn("Warning: hostConn.SetWriteDeadline: " + err.Error())
 				}
-				m, cErr := clientConn.Write(buf[:n])
-				if cErr == nil {
-					Logger.DebugF("downstream: Write %dB: %s\n", m, buf[:m])
-					break
-				} else {
-					if IsClosedError(cErr) {
-						first := !ct.isRunning()
-						if p.keep && ct.runContinue() {
-							if first {
-								Logger.Info("downstream: reconnect waiting")
-							}
-							sleep()
-							continue
-						} else {
-							return
-						}
+				m, herr := hostConn.Write(p.upBuf[p.upBufLB:p.upBufUB])
+				Logger.DebugF("upstream: Wrote: %s", p.upBuf[p.upBufLB:p.upBufUB])
+				p.upBufLB += m
+				if herr != nil {
+					if IsDeadlineExceeded(herr) {
+						continue
 					} else {
-						Logger.ErrorE(cErr)
 						return
 					}
 				}
+				break
 			}
-			ct.reset()
+			p.upBufUB = 0
+			p.upBufLB = 0
 		}
-		if hErr != nil {
-			if hErr != io.EOF && !IsClosedError(hErr) {
-				Logger.ErrorE(hErr)
+		if cerr != nil {
+			if IsDeadlineExceeded(cerr) {
+				continue
+			} else if (cerr == io.EOF) || IsClosedError(cerr) {
+				Logger.Info("upstream: client reached end")
+				return
+				// first := !ct.isRunning()
+				// if p.keep && ct.runContinue() {
+				// 	if first {
+				// 		Logger.Info("upstream: reconnect waiting")
+				// 	}
+				// 	sleep()
+				// 	continue
+				// } else {
+				// 	return
+				// }
 			} else {
+				Logger.ErrorE(cerr)
+				return
+			}
+		}
+		// ct.reset()
+	}
+}
+
+func (p *Session) downstream(clientConn, hostConn *Connection, wg *sync.WaitGroup) {
+	defer func() {
+		Logger.Info("downstream: finish")
+		p.setDownstreamAlive(false)
+		if wg != nil {
+			wg.Done()
+		}
+	}()
+	// ct := &CountdownTimer{Deadline: KeepSec}
+	for p.getStreamsAlive() {
+		var herr error
+		if p.downBufUB == 0 {
+			if hostConn.IsClosed() {
+				return
+			}
+			if err := hostConn.SetReadDeadline(time.Now().Add(TimeoutDuration)); err != nil {
+				Logger.Warn("Warning: hostConn.SetReadDeadline: " + err.Error())
+			}
+			p.downBufUB, herr = hostConn.Read(p.downBuf)
+			p.downBufLB = 0
+		}
+		if p.downBufUB > 0 {
+			for p.getStreamsAlive() {
+				if clientConn.IsClosed() {
+					return
+				}
+				if err := clientConn.SetWriteDeadline(time.Now().Add(TimeoutDuration)); err != nil {
+					Logger.Warn("Warning: clientConn.SetWriteDeadline: " + err.Error())
+				}
+				m, cerr := clientConn.Write(p.downBuf[p.downBufLB:p.downBufUB])
+				Logger.DebugF("downstream: Wrote: %s\n", p.downBuf[p.downBufLB:p.downBufUB])
+				p.downBufUB += m
+				if cerr != nil {
+					if IsDeadlineExceeded(cerr) {
+						continue
+					} else if IsClosedError(cerr) {
+						Logger.Info("downstream: client is close")
+						return
+						// first := !ct.isRunning()
+						// if p.keep && ct.runContinue() {
+						// 	if first {
+						// 		Logger.Info("downstream: reconnect waiting")
+						// 	}
+						// 	sleep()
+						// 	continue
+						// } else {
+						// 	return
+						// }
+					} else {
+						Logger.ErrorE(cerr)
+						return
+					}
+				}
+				p.downBufUB = 0
+				p.downBufLB = 0
+				break
+			}
+			// ct.reset()
+		}
+		if herr != nil {
+			if IsDeadlineExceeded(herr) {
+				continue
+			}
+			if (herr == io.EOF) {
 				Logger.Info("downstream: host reached end")
+			} else {
+				Logger.ErrorE(herr)
 			}
 			return
 		}
 	}
 }
 
-func sleep() {
-	time.Sleep(RetryInterval)
+type net_TCPConn = net.TCPConn
+
+type Connection struct {
+	*net_TCPConn
+	cmux   sync.Mutex
+	closed bool
+}
+
+func NewConnection(tcpConn *net.TCPConn) *Connection {
+	return &Connection{
+		net_TCPConn: tcpConn,
+	}
+}
+
+func (p *Connection) IsClosed() bool {
+	defer p.cmux.Unlock()
+	p.cmux.Lock()
+	return p.closed
+}
+
+func (p *Connection) Close() error {
+	defer p.cmux.Unlock()
+	p.cmux.Lock()
+	if p.closed {
+		return nil
+	}
+	err := p.net_TCPConn.Close()
+	p.closed = true
+	return err
 }
 
 type CountdownTimer struct {
@@ -344,4 +389,8 @@ func (p *CountdownTimer) runContinue() bool {
 		p.running = true
 	}
 	return time.Now().Sub(p.start).Seconds() < p.Deadline
+}
+
+func sleep() {
+	time.Sleep(RetryInterval)
 }

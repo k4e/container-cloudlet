@@ -8,7 +8,7 @@ public class App {
     public static final UUID SESH_UUID = UUID.fromString("55C497AC-8AD5-4DA1-8673-6199443AE137");
 
     public static void main(String[] args) throws Exception {
-        System.out.println("Build 2020-09-26");
+        System.out.println("Build 2020-09-28");
         if (args.length < 1) {
             System.err.println("Method must be given");
             System.exit(-1);
@@ -115,6 +115,12 @@ public class App {
         String hostB = args[3];
         int portB = Integer.parseInt(args[4]);
         int dataSize = Integer.parseInt(args[5]);
-        new Experiment(SESH_UUID).exec(hostA, portA, hostB, portB, dataSize);
+        boolean fullCheck = false;
+        for (int i = 1; i < args.length; ++i) {
+            if ("-f".equals(args[i])) {
+                fullCheck = true;
+            }
+        }
+        new Experiment(SESH_UUID).exec(hostA, portA, hostB, portB, dataSize, fullCheck);
     }
 }
