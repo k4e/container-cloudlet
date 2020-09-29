@@ -8,11 +8,15 @@ import com.google.gson.Gson;
 
 public class CloudletClient {
 
-    public static void create(String host, int port, boolean createApp) throws IOException {
-        Request req = Request.create(
+    public static Request getAppSampleRequest(boolean createApp) {
+        return Request.create(
             new Request.Create("app-sample", createApp, "k4edev/app-sample:latest", 8888, 30088,
                 ImmutableMap.of("SLEEP_MS", "0"))
         );
+    }
+
+    public static void create(String host, int port, boolean createApp) throws IOException {
+        Request req = getAppSampleRequest(createApp);
         send(host, port, req);
     }
 

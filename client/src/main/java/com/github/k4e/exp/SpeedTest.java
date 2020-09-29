@@ -1,4 +1,4 @@
-package com.github.k4e;
+package com.github.k4e.exp;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -9,12 +9,13 @@ import java.util.UUID;
 
 import com.github.k4e.types.ProtocolHeader;
 
-public class Experiment {
+public class SpeedTest {
 
+    public static final int DEFAULT_COUNT = 10;
     private final Random random = new Random(101L);
     private final UUID seshId;
 
-    public Experiment(UUID seshId) {
+    public SpeedTest(UUID seshId) {
         this.seshId = seshId;
     }
 
@@ -24,24 +25,30 @@ public class Experiment {
         String hostB,
         int portB,
         int dataSizeKB,
+        int count,
+        boolean noWait,
         boolean fullCheck
     ) throws IOException {
         final int dataSizeBytes = dataSizeKB * 1024;
+        if (count < 0) {
+            count = DEFAULT_COUNT;
+        }
         byte[] data = generateBytes(dataSizeBytes);
         byte[] buf = new byte[dataSizeBytes * 4];
-        System.out.println(dataSizeBytes);
         ProtocolHeader headerA = ProtocolHeader.create(seshId, null, (short)0, false);
         ProtocolHeader headerB = ProtocolHeader.create(seshId, hostA, (short)portA, false);
         System.out.println("# --> Server A");
-        routine(hostA, portA, headerA, data, buf, fullCheck);
+        routine(hostA, portA, headerA, data, buf, count, fullCheck);
         System.out.println("Wait for 4 sec");
-        try {
-            Thread.sleep(4000);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
+        if (!noWait) {
+            try {
+                Thread.sleep(4000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
         System.out.println("# --> Server B");
-        routine(hostB, portB, headerB, data, buf, fullCheck);
+        routine(hostB, portB, headerB, data, buf, count, fullCheck);
     }
 
     private void routine(
@@ -50,6 +57,7 @@ public class Experiment {
         ProtocolHeader header,
         byte[] data,
         byte[] buf,
+        int count,
         boolean fullCheck
     ) throws IOException {
         long start, end;
@@ -68,8 +76,8 @@ public class Experiment {
             out.write(pollData);
             in.read(buf);
             end = System.nanoTime();
-            System.out.println(end - start);
-            for (int i = 0; i < 10; ++i) {
+            System.out.println("Connection time: " + (end - start));
+            for (int i = 0; i < count; ++i) {
                 start = System.nanoTime();
                 out.write(data);
                 out.flush();

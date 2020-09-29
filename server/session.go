@@ -157,6 +157,10 @@ func (p *Session) Start(
 		conn, err := net.DialTCP(network, nil, hostAddr)
 		if err != nil {
 			Logger.ErrorE(err)
+			Logger.Info("Client close")
+			if err := clientConn.Close(); err != nil {
+				Logger.Warn("Warning: clientConn.Close: " + err.Error())
+			}
 			return
 		}
 		Logger.Info("Host open")
