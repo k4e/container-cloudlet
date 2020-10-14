@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-restore-pod
+  labels:
+    app: app-restore
+spec:
+  containers:
+  - name: app-restore-c
+    image: k4edev/app-sample
+    command: ["/bin/sh", "-c", "--"]
+    args: ["while true; do sleep 60; done;"]
+    ports:
+    - containerPort: 8888
+    env:
+    - name: SLEEP_MS
+      value: "0"
+    securityContext:
+      privileged: true
+  imagePullSecrets:
+  - name: regcred

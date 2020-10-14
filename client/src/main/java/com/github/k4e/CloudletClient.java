@@ -34,6 +34,6 @@ public class CloudletClient {
     }
 
     private static void send(String host, int port, String msg) throws IOException {
-        SocketSendRecv.sendRecv(host, port, msg);
+        new SocketClient(host, port, msg).exec();
     }
 }

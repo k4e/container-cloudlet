@@ -24,6 +24,9 @@ public class App {
         case "delete":
             delete(args);
             break;
+        case "send":
+            send(args);
+            break;
         case "session":
         case "sesh":
             session(args);
@@ -63,6 +66,23 @@ public class App {
         String host = args[1];
         int port = Integer.parseInt(args[2]);
         CloudletClient.delete(host, port);
+    }
+
+    private static void send(String[] args) throws IOException {
+        if (args.length < 3) {
+            System.err.println("Required args: session <Host> <Port>");
+            System.exit(-1);
+        }
+        String host = args[1];
+        int port = Integer.parseInt(args[2]);
+        StringBuffer buffer = new StringBuffer();
+        for (int i = 3; i < args.length; ++i) {
+            buffer.append(args[i]);
+            if (i < args.length - 1) {
+                buffer.append(" ");
+            }
+        }
+        new SocketClient(host, port, buffer.toString()).exec();
     }
 
     private static void session(String[] args) throws IOException {

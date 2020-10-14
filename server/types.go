@@ -13,6 +13,13 @@ type Request struct {
 	Delete struct {
 		Name string `json:name`
 	} `json:delete`
+	Migrate struct {
+		Name    string `json:name`
+		SrcAddr string `json:srcAddr`
+	} `json:migrate`
+	Checkpoint struct {
+		Name   string `json:name`
+	} `json:_checkpoint`
 }
 
 type Response struct {

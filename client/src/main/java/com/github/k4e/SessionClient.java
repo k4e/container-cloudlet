@@ -20,48 +20,6 @@ public class SessionClient {
         return new SessionClient(host, port, header);
     }
 
-    class SessionProc implements SocketProc {
-        public void accept(Socket sock) throws IOException {
-            Thread receiver = new Thread(() -> {
-                try {
-                    char[] buf = new char[8192];
-                    InputStreamReader reader = new InputStreamReader(sock.getInputStream());
-                    while (true) {
-                        //while (!reader.ready()) {
-                        //    Thread.sleep(200);
-                        //}
-                        int count = reader.read(buf);
-                        if (count < 0) {
-                            System.out.println("Read reached end");
-                            break;
-                        }
-                        syncPrintln("Recv: " + (count > 0 ? new String(buf, 0, count) : "(none)"));
-                    }
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }// catch (InterruptedException e) {
-                //    syncPrintln("Receiver thread end");
-                //}
-            });
-            BufferedReader stdin = new BufferedReader(new InputStreamReader(System.in));
-            PrintWriter writer = new PrintWriter(sock.getOutputStream());
-            sendHeader(sock);
-            receiver.start();
-            System.out.println("Session start. Write text to send or /q to quit");
-            while (receiver.isAlive()) {
-                String msg = stdin.readLine();
-                if (msg == null || "/q".equals(msg.trim())) {
-                    break;
-                }
-                writer.println(msg);
-                writer.flush();
-                syncPrintln("Sent: " + msg);
-            }
-            receiver.interrupt();
-            System.out.println("Session end");
-        }
-    }
-    
     private final String host;
     private final int port;
     private final ProtocolHeader header;
@@ -75,9 +33,59 @@ public class SessionClient {
     }
 
     public void exec() throws IOException {
-        SocketClient.of(host, port, new SessionProc()).conn();
+        Socket sock = null;
+        try {
+            sock = new Socket(host, port);
+            System.out.println("Connection open");
+            accept(sock);
+        } finally {
+            if (sock != null) {
+                sock.close();
+                System.out.println("Connection closed");
+            }
+        }
     }
     
+    public void accept(Socket sock) throws IOException {
+        Thread receiver = new Thread(() -> {
+            try {
+                char[] buf = new char[8192];
+                InputStreamReader reader = new InputStreamReader(sock.getInputStream());
+                while (true) {
+                    while (!reader.ready()) {
+                        Thread.sleep(200);
+                    }
+                    int count = reader.read(buf);
+                    if (count < 0) {
+                        System.out.println("Read reached end");
+                        break;
+                    }
+                    syncPrintln("Recv: " + (count > 0 ? new String(buf, 0, count) : "(none)"));
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            } catch (InterruptedException e) {
+                syncPrintln("Receiver thread end");
+            }
+        });
+        BufferedReader stdin = new BufferedReader(new InputStreamReader(System.in));
+        PrintWriter writer = new PrintWriter(sock.getOutputStream());
+        sendHeader(sock);
+        receiver.start();
+        System.out.println("Session start. Write text to send or /q to quit");
+        while (receiver.isAlive()) {
+            String msg = stdin.readLine();
+            if (msg == null || "/q".equals(msg.trim())) {
+                break;
+            }
+            writer.println(msg);
+            writer.flush();
+            syncPrintln("Sent: " + msg);
+        }
+        receiver.interrupt();
+        System.out.println("Session end");
+    }
+
     private void sendHeader(Socket sock) throws IOException {
         System.out.println("Header: " + header.toString());
         OutputStream out = sock.getOutputStream();

@@ -6,19 +6,20 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-func NewClient() (kubernetes.Interface, error) {
+func NewClient() (kubernetes.Interface, *rest.Config, error) {
 	config, err := clientcmd.BuildConfigFromFlags("", clientcmd.RecommendedHomeFile)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return clientset, nil
+	return clientset, config, nil
 }
 
 func CreatePod(
@@ -37,6 +38,8 @@ func CreatePod(
 			Value: v,
 		})
 	}
+	shareProcessNamespace := true
+	privileded := true
 	pod := &apiv1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
@@ -58,13 +61,18 @@ func CreatePod(
 						},
 					},
 					Env: envVars,
+					SecurityContext: &apiv1.SecurityContext{
+						Privileged: &privileded,
+					},
 				},
 			},
+			ShareProcessNamespace: &shareProcessNamespace,
 			ImagePullSecrets: []apiv1.LocalObjectReference{
 				{
 					Name: "regcred",
 				},
 			},
+			RestartPolicy: apiv1.RestartPolicyNever,
 		},
 	}
 	result, err := clientset.CoreV1().Pods("default").
@@ -73,6 +81,22 @@ func CreatePod(
 		return nil, err
 	}
 	return result, nil
+}
+
+func GetPod(
+	clientset kubernetes.Interface,
+	podName string,
+) (*apiv1.Pod, error) {
+	return clientset.CoreV1().Pods("default").Get(
+		context.TODO(), podName, metav1.GetOptions{})
+}
+
+func DeletePod(
+	clientset kubernetes.Interface,
+	podName string,
+) error {
+	return clientset.CoreV1().Pods("default").Delete(
+		context.TODO(), podName, metav1.DeleteOptions{})
 }
 
 func CreateService(
@@ -117,14 +141,6 @@ func GetService(
 ) (*apiv1.Service, error) {
 	return clientset.CoreV1().Services("default").
 		Get(context.TODO(), serviceName, metav1.GetOptions{})
-}
-
-func DeletePod(
-	clientset kubernetes.Interface,
-	podName string,
-) error {
-	return clientset.CoreV1().Pods("default").Delete(
-		context.TODO(), podName, metav1.DeleteOptions{})
 }
 
 func DeleteService(

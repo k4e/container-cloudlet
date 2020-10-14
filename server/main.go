@@ -60,6 +60,8 @@ func handleConnection(conn net.Conn) {
 		doCreate(&req)
 	case "delete":
 		doDelete(&req)
+	case "migrate":
+
 	default:
 		doUnsupported(&req)
 	}
@@ -75,7 +77,7 @@ func doCreate(req *Request) {
 	env := req.Create.Env
 	serviceName := req.Create.Name + "-svc"
 	clusterIpName := req.Create.Name + "-cip"
-	clientset, err := NewClient()
+	clientset, _, err := NewClient()
 	if err != nil {
 		Logger.ErrorE(err)
 		return
@@ -118,7 +120,7 @@ func doCreate(req *Request) {
 		var appAddr *net.TCPAddr
 		clientAddrStr := fmt.Sprintf(":%d", extPort)
 		var rErr error
-		clientAddr, rErr = net.ResolveTCPAddr("tcp", clientAddrStr);
+		clientAddr, rErr = net.ResolveTCPAddr("tcp", clientAddrStr)
 		if rErr != nil {
 			Logger.ErrorE(err)
 		}
@@ -144,7 +146,7 @@ func doDelete(req *Request) {
 	name := req.Delete.Name
 	podName := req.Delete.Name + "-pod"
 	serviceName := req.Delete.Name + "-svc"
-	clientset, err := NewClient()
+	clientset, _, err := NewClient()
 	if err != nil {
 		Logger.ErrorE(err)
 		return
@@ -167,6 +169,18 @@ func doDelete(req *Request) {
 	}
 }
 
+// func doMigrate(req *Request) {
+// 	name := req.Migrate.Name
+// 	podName := name + "-pod"
+// 	srcAddr := req.Migrate.SrcAddr
+// }
+
+// func doCheckpoint(req *Request) {
+// 	podName := req.Checkpoint.Name + "-pod"
+// 	imagesDir := req.Checkpoint.ImagesDir
+
+// }
+
 func doUnsupported(req *Request) {
-	Logger.Error("Unsupported operation")
+	Logger.Error("Unsupported operation: " + req.Op)
 }
