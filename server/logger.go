@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 )
 
 type SLog struct {
@@ -18,23 +20,43 @@ func (p *SLog) SetVerbosity(verbose bool) {
 }
 
 func (p *SLog) Error(s string) {
-	fmt.Fprintln(os.Stderr, s)
+	pos := ""
+	if _, file, line, ok := runtime.Caller(1); ok {
+		pos = fmt.Sprintf("%s:%d; ", filepath.Base(file), line)
+	}
+	fmt.Fprintln(os.Stderr, pos+s)
 }
 
 func (p *SLog) ErrorF(format string, a ...interface{}) {
-	fmt.Fprintf(os.Stderr, format, a...)
+	pos := ""
+	if _, file, line, ok := runtime.Caller(1); ok {
+		pos = fmt.Sprintf("%s:%d; ", filepath.Base(file), line)
+	}
+	fmt.Fprintf(os.Stderr, pos+format, a...)
 }
 
 func (p *SLog) ErrorE(e error) {
-	fmt.Fprintln(os.Stderr, e)
+	pos := ""
+	if _, file, line, ok := runtime.Caller(1); ok {
+		pos = fmt.Sprintf("%s:%d; ", filepath.Base(file), line)
+	}
+	fmt.Fprintln(os.Stderr, pos+e.Error())
 }
 
 func (p *SLog) Warn(s string) {
-	fmt.Println(s)
+	pos := ""
+	if _, file, line, ok := runtime.Caller(1); ok {
+		pos = fmt.Sprintf("%s:%d; ", filepath.Base(file), line)
+	}
+	fmt.Println(pos + s)
 }
 
 func (p *SLog) WarnF(format string, a ...interface{}) {
-	fmt.Printf(format, a...)
+	pos := ""
+	if _, file, line, ok := runtime.Caller(1); ok {
+		pos = fmt.Sprintf("%s:%d; ", filepath.Base(file), line)
+	}
+	fmt.Printf(pos+format, a...)
 }
 
 func (p *SLog) Info(s string) {
