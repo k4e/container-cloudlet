@@ -12,12 +12,6 @@ import (
 	"k8s.io/client-go/transport/spdy"
 )
 
-type KubePortForward struct {
-	stopChan      chan struct{}
-	readyChan     chan struct{}
-	portForwarder *portforward.PortForwarder
-}
-
 func NewKubePortForward(
 	config *rest.Config,
 	namespace string,
@@ -26,7 +20,9 @@ func NewKubePortForward(
 	podPort int,
 	out io.Writer,
 	errOut io.Writer,
-) (*KubePortForward, error) {
+	stopChan chan struct{},
+	readyChan chan struct{},
+) (*portforward.PortForwarder, error) {
 	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/portforward", namespace, podName)
 	host := strings.TrimLeft(config.Host, "htps:/")
 	url := url.URL{Scheme: "https", Path: path, Host: host}
@@ -38,22 +34,7 @@ func NewKubePortForward(
 	}
 	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport},
 		http.MethodPost, &url)
-	stopChan := make(chan struct{}, 1)
-	readyChan := make(chan struct{})
 	portForwarder, err := portforward.NewOnAddresses(dialer, addrs, ports,
 		stopChan, readyChan, out, errOut)
-	return &KubePortForward{
-		stopChan:      stopChan,
-		readyChan:     readyChan,
-		portForwarder: portForwarder,
-	}, nil
-}
-
-/* Blocking function */
-func (p *KubePortForward) Start() error {
-	return p.portForwarder.ForwardPorts()
-}
-
-func (p *KubePortForward) Close() {
-	close(p.stopChan)
+	return portForwarder, err
 }

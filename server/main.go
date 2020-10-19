@@ -2,9 +2,7 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -34,7 +32,7 @@ func main() {
 	fmt.Println("Interface IP addresses:")
 	PrintInterfaceAddrs("- ")
 	chanClose := make(chan interface{})
-	go startAPIServer(chanClose)
+	go StartAPIServer(chanClose)
 	fmt.Println("API server is starting at: " + APIServerLocalAddr)
 	if interactive {
 		startCommandLine()
@@ -49,7 +47,6 @@ func main() {
 func startCommandLine() {
 	scan := bufio.NewScanner(os.Stdin)
 	for {
-
 		fmt.Print("> ")
 		scan.Scan()
 		line := scan.Text()
@@ -62,6 +59,8 @@ func startCommandLine() {
 			return
 		case "quit":
 			return
+		case "tunnel":
+			doTunnelCmd(args)
 		default:
 			doUnsupportedCmd(args)
 		}
@@ -80,64 +79,6 @@ func waitForSignal() {
 	wg.Wait()
 }
 
-func startAPIServer(chanClose chan interface{}) {
-	var ln net.Listener
-	ln, err := net.Listen("tcp", APIServerLocalAddr)
-	if err != nil {
-		panic(err)
-	}
-	open := true
-	go func() {
-		<-chanClose
-		open = false
-		ln.Close()
-	}()
-	for open {
-		conn, err := ln.Accept()
-		if err != nil {
-			if IsClosedError(err) {
-				Logger.Info("API server close")
-				return
-			} else {
-				Logger.ErrorE(err)
-				continue
-			}
-		}
-		go onConnection(conn)
-	}
-}
-
-func onConnection(conn net.Conn) {
-	defer func() {
-		Logger.InfoF("Close: %v\n", conn.RemoteAddr())
-		conn.Close()
-	}()
-	Logger.InfoF("Accept: %v\n", conn.RemoteAddr())
-	conn.SetReadDeadline(time.Now().Add(timeout * time.Second))
-	var bReq []byte
-	bReq, err := Readline(conn)
-	if err != nil {
-		Logger.ErrorE(err)
-		return
-	}
-	Logger.Info("Request: " + string(bReq))
-	var req Request
-	if err := json.Unmarshal(bReq, &req); err != nil {
-		Logger.ErrorE(err)
-		return
-	}
-	switch req.Method {
-	case "deploy":
-		doDeployReq(&req)
-	case "remove":
-		doRemoveReq(&req)
-	case "_checkpoint":
-
-	default:
-		doUnsupportedReq(&req)
-	}
-}
-
 func argsToMap(args []string) map[string]string {
 	m := map[string]string{}
 	for _, v := range args {
@@ -153,35 +94,38 @@ func argsToMap(args []string) map[string]string {
 	return m
 }
 
-func doDeployReq(req *Request) {
-	switch req.Deploy.Type {
-	case DeployTypeNew:
-		apiService.DeployNew(
-			req.Deploy.Name,
-			req.Deploy.NewApp.Image,
-			NewPortMap(req.Deploy.NewApp.Port.In, req.Deploy.NewApp.Port.Ext),
-			req.Deploy.NewApp.Env,
-		)
-	case DeployTypeFwd:
-		apiService.DeployFwd(
-			req.Deploy.Name,
-			req.Deploy.Fwd.SrcAddr,
-			NewPortMap(req.Deploy.Fwd.Port.In, req.Deploy.Fwd.Port.Ext),
-		)
-	default:
-		Logger.Error("Unsupported deploy type: " + req.Deploy.Type)
+func doTunnelCmd(args []string) {
+	if len(args) < 3 {
+		fmt.Fprintf(os.Stderr, "Usage: %s <local-addr> <remote-addr>\n", args[0])
+		return
 	}
-}
-
-func doRemoveReq(req *Request) {
-	name := req.Remove.Name
-	apiService.Remove(name)
+	localAddr := args[1]
+	remoteAddr := args[2]
+	sshConf, err := LoadSSHConf("./sshconf.yaml")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	sshClient, err := NewSSHClient(sshConf)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	chanReady := make(chan struct{}, 1)
+	chanClose := make(chan struct{})
+	go func() {
+		<-chanReady
+		fmt.Println("SSH client ready")
+	}()
+	go sshClient.OpenTunnel(localAddr, remoteAddr, chanReady, chanClose)
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	fmt.Println("Open SSH tunnel; Ctrl-C to abort")
+	<-sigs
+	signal.Reset(syscall.SIGINT, syscall.SIGTERM)
+	close(chanClose)
 }
 
 func doUnsupportedCmd(args []string) {
 	fmt.Println("Unsupported command: " + args[0])
-}
-
-func doUnsupportedReq(req *Request) {
-	Logger.Error("Unsupported request method: " + req.Method)
 }

@@ -11,7 +11,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,11 +21,6 @@ const KeepSec = 60.
 const TimeoutDuration = 1000 * time.Millisecond
 const RetryInterval = 1000 * time.Millisecond
 const BufferSize = 1024 * 1024
-
-func IsClosedError(e error) bool {
-	msg := "use of closed network connection"
-	return strings.Contains(e.Error(), msg)
-}
 
 func IsDeadlineExceeded(err error) bool {
 	nerr, ok := err.(net.Error)
