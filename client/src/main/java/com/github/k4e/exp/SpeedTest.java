@@ -7,6 +7,7 @@ import java.net.Socket;
 import java.util.Random;
 import java.util.UUID;
 
+import com.github.k4e.CloudletClient;
 import com.github.k4e.types.ProtocolHeader;
 
 public class SpeedTest {
@@ -21,9 +22,7 @@ public class SpeedTest {
 
     public void exec(
         String hostA,
-        int portA,
         String hostB,
-        int portB,
         int dataSizeKB,
         int count,
         boolean noWait,
@@ -35,10 +34,10 @@ public class SpeedTest {
         }
         byte[] data = generateBytes(dataSizeBytes);
         byte[] buf = new byte[dataSizeBytes * 4];
-        ProtocolHeader headerA = ProtocolHeader.create(seshId, null, (short)0, false);
-        ProtocolHeader headerB = ProtocolHeader.create(seshId, hostA, (short)portA, false);
+        ProtocolHeader headerA = ProtocolHeader.create(seshId);
+        ProtocolHeader headerB = ProtocolHeader.create(seshId);
         System.out.println("# --> Server A");
-        routine(hostA, portA, headerA, data, buf, count, fullCheck);
+        routine(hostA, CloudletClient.DEFAULT_APP_EXT_PORT, headerA, data, buf, count, fullCheck);
         System.out.println("Wait for 4 sec");
         if (!noWait) {
             try {
@@ -48,7 +47,7 @@ public class SpeedTest {
             }
         }
         System.out.println("# --> Server B");
-        routine(hostB, portB, headerB, data, buf, count, fullCheck);
+        routine(hostB, CloudletClient.DEFAULT_APP_EXT_PORT, headerB, data, buf, count, fullCheck);
     }
 
     private void routine(

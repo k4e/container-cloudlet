@@ -1,4 +1,8 @@
 
+# Hyper-V DNS
+
+```C:\Windows\System32\drivers\etc\hosts.ics``` を開く
+
 # IP アドレス固定
 
 ## Hyper-V

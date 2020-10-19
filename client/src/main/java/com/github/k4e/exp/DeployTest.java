@@ -14,32 +14,25 @@ import com.github.k4e.types.Request;
 import com.google.common.base.Strings;
 import com.google.gson.Gson;
 
-public class CreationTest {
+public class DeployTest {
     
     private final UUID seshId;
 
-    public CreationTest(UUID seshId) {
+    public DeployTest(UUID seshId) {
         this.seshId = seshId;
     }
 
-    public void exec(
-        String host,
-        int cloudletPort,
-        int sessionPort,
-        boolean createApp,
-        String fwdHost,
-        short fwdPort
-    ) throws IOException {
-        if (!createApp) {
-            if (Strings.isNullOrEmpty(fwdHost) || fwdPort == 0) {
-                throw new IllegalArgumentException(String.format(
-                    "If createApp == true, it requires fwdHost and fwdPort (given %s:%s)",
-                    fwdHost, fwdPort));
-            }
+    public void exec(String host, Request.Deploy.Type type, String srcAddr) throws IOException {
+        if (type == null) {
+            throw new IllegalArgumentException("type == null");
+        }
+        if ((type == Request.Deploy.Type.FWD || type == Request.Deploy.Type.LM)
+                && Strings.isNullOrEmpty(srcAddr)) {
+            throw new IllegalArgumentException("type == FWD but srcAddr is empty");
         }
         Gson gson = new Gson();
-        Request req = CloudletClient.getAppSampleRequest(createApp);
-        ProtocolHeader header = ProtocolHeader.create(seshId, fwdHost, fwdPort, false);
+        Request req = CloudletClient.createAppSampleRequest(type, srcAddr);
+        ProtocolHeader header = ProtocolHeader.create(seshId);
         byte headerBytes[] = header.getBytes();
         String msg = gson.toJson(req);
         char cbuf[] = new char[4096];
@@ -47,10 +40,10 @@ public class CreationTest {
         byte testData[] = "Hello world ABCD".getBytes();
         Socket sockCC = null;
         try {
-            System.out.println("--- Creation test start ---");
+            System.out.println("--- Deploy test start ---");
             long start = System.currentTimeMillis();
-            System.out.println("Sending creation request to Cloudlet Controller");
-            sockCC = new Socket(host, cloudletPort);
+            System.out.println("Sending deploy request to Cloudlet Controller");
+            sockCC = new Socket(host, CloudletClient.DEFAULT_CLOUDLET_PORT);
             PrintWriter writer = new PrintWriter(sockCC.getOutputStream());
             writer.println(msg);
             writer.flush();
@@ -65,7 +58,7 @@ public class CreationTest {
                 System.out.print(".");
                 int ssCnt = 0;
                 boolean connReset = false;
-                try (Socket sockSS = new Socket(host, sessionPort)) {
+                try (Socket sockSS = new Socket(host, CloudletClient.DEFAULT_APP_EXT_PORT)) {
                     sockSS.getOutputStream().write(headerBytes);
                     sockSS.getOutputStream().flush();
                     sockSS.getOutputStream().write(testData);
@@ -102,8 +95,7 @@ public class CreationTest {
             if (sockCC != null && !sockCC.isClosed()) {
                 sockCC.close();
             }
-            System.out.printf("Please clean up the server: run with args: delete %s %d\n",
-                    host, cloudletPort);
+            System.out.printf("Please clean up the server: run with args: remove %s\n", host);
         }
     }
 }

@@ -11,17 +11,24 @@ type ForwardingService struct {
 	closed     bool
 	network    string
 	clientAddr *net.TCPAddr
-	appAddr    *net.TCPAddr
-	ln*        net.TCPListener
+	hostAddr   *net.TCPAddr
+	isExtHost  bool
+	ln         *net.TCPListener
 	sp         SessionPool
 }
 
-func StartForwardingService(network string, clientAddr, appAddr *net.TCPAddr) (*ForwardingService, error) {
+func StartForwardingService(
+	network string,
+	clientAddr *net.TCPAddr,
+	hostAddr *net.TCPAddr,
+	isExtHost bool,
+) (*ForwardingService, error) {
 	p := &ForwardingService{
 		closed:     false,
 		network:    network,
 		clientAddr: clientAddr,
-		appAddr:    appAddr,
+		hostAddr:   hostAddr,
+		isExtHost:  isExtHost,
 		ln:         nil,
 	}
 	ln, err := net.ListenTCP(network, clientAddr)
@@ -45,15 +52,9 @@ func (p *ForwardingService) Close() error {
 }
 
 func (p *ForwardingService) routine() {
-	var dest string
-	if p.appAddr != nil {
-		dest = "app=" + p.appAddr.String()
-	} else {
-		dest = "?"
-	}
-	Logger.InfoF("Forwarding open: client=%s <--> %s\n", p.clientAddr.String(), dest)
+	Logger.InfoF("Forwarding open: client=%s <--> %s\n", p.clientAddr.String(), p.hostAddr.String())
 	defer func() {
-		Logger.InfoF("Forwarding closed: client=%s <--> %s\n", p.clientAddr.String(), dest)
+		Logger.InfoF("Forwarding closed: client=%s <--> %s\n", p.clientAddr.String(), p.hostAddr.String())
 	}()
 	for {
 		brk := false
@@ -63,7 +64,7 @@ func (p *ForwardingService) routine() {
 		if brk {
 			break
 		}
-		if err := p.sp.Accept(p.ln, p.network, p.appAddr); err != nil {
+		if err := p.sp.Accept(p.ln, p.network, p.hostAddr, p.isExtHost); err != nil {
 			Logger.ErrorE(err)
 		}
 	}

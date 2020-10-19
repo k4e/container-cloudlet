@@ -1,28 +1,49 @@
 package main
 
+const (
+	DeployTypeNew = "new"
+	DeployTypeFwd = "fwd"
+	DeployTypeLM  = "lm"
+)
+
 type Request struct {
-	Op     string `json:"op"`
-	Create struct {
-		Name      string            `json:name`
-		CreateApp bool              `json:createApp`
-		Image     string            `json:"image"`
-		Port      int               `json:port`
-		ExtPort   int               `json:extPort`
-		Env       map[string]string `json:env`
-	} `json:create`
-	Delete struct {
-		Name string `json:name`
-	} `json:delete`
-	Migrate struct {
-		Name    string `json:name`
-		SrcAddr string `json:srcAddr`
-	} `json:migrate`
+	Method string `json:"method"`
+	Deploy struct {
+		Name   string `json:"name"`
+		Type   string `json:"type"`
+		NewApp struct {
+			Image string `json:"image"`
+			Port  struct {
+				In  int `json:"in"`
+				Ext int `json:"ext"`
+			} `json:"port"`
+			Env map[string]string `json:"env"`
+		} `json:"newApp"`
+		Fwd struct {
+			SrcAddr string `json:"srcAddr"`
+			Port    struct {
+				In  int `json:"in"`
+				Ext int `json:"ext"`
+			} `json:"port"`
+		} `json:"fwd"`
+		LM struct {
+			SrcAddr string `json:"srcAddr"`
+			Port    struct {
+				In  int `json:"in"`
+				Ext int `json:"ext"`
+			} `json:"port"`
+		} `json:"lm"`
+	} `json:"deploy"`
+	Remove struct {
+		Name string `json:"name"`
+	} `json:"remove"`
 	Checkpoint struct {
-		Name   string `json:name`
-	} `json:_checkpoint`
+		Phase string `json:"phase"`
+		Name  string `json:"name"`
+	} `json:"_checkpoint"`
 }
 
 type Response struct {
-	Ok  bool   `json:ok`
-	Msg string `json:msg`
+	Ok  bool   `json:"ok"`
+	Msg string `json:"msg"`
 }

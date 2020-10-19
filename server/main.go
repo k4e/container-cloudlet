@@ -1,42 +1,113 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
-const local_addr = ":9999"
+const APIServerLocalAddr = ":9999"
 const timeout = 30
 
-var fwdsvcs sync.Map
+var apiService *APIService
 
 func main() {
+	interactive := false
 	for _, arg := range os.Args[1:] {
-		if arg == "-v" {
+		switch arg {
+		case "-v":
 			Logger.SetVerbosity(true)
+		case "-i":
+			interactive = true
+		default:
+			Logger.Warn("Warning: ignored arg: " + arg)
 		}
 	}
-	fmt.Println("Interface IP addresses ...")
-	PrintInterfaceAddrs()
-	ln, err := net.Listen("tcp", local_addr)
-	if err != nil {
-		panic(err)
+	apiService = NewAPIService()
+	fmt.Println("Interface IP addresses:")
+	PrintInterfaceAddrs("- ")
+	chanClose := make(chan interface{})
+	go startAPIServer(chanClose)
+	fmt.Println("API server is starting at: " + APIServerLocalAddr)
+	if interactive {
+		startCommandLine()
+	} else {
+		waitForSignal()
 	}
+	close(chanClose)
+	time.Sleep(time.Millisecond * 100)
+	fmt.Println("Bye")
+}
+
+func startCommandLine() {
+	scan := bufio.NewScanner(os.Stdin)
 	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			Logger.ErrorE(err)
+
+		fmt.Print("> ")
+		scan.Scan()
+		line := scan.Text()
+		args := strings.Fields(line)
+		if len(args) == 0 {
 			continue
 		}
-		go handleConnection(conn)
+		switch args[0] {
+		case "/q":
+			return
+		case "quit":
+			return
+		default:
+			doUnsupportedCmd(args)
+		}
 	}
 }
 
-func handleConnection(conn net.Conn) {
+func waitForSignal() {
+	wg := sync.WaitGroup{}
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	wg.Add(1)
+	go func() {
+		<-sigs
+		wg.Done()
+	}()
+	wg.Wait()
+}
+
+func startAPIServer(chanClose chan interface{}) {
+	var ln net.Listener
+	ln, err := net.Listen("tcp", APIServerLocalAddr)
+	if err != nil {
+		panic(err)
+	}
+	open := true
+	go func() {
+		<-chanClose
+		open = false
+		ln.Close()
+	}()
+	for open {
+		conn, err := ln.Accept()
+		if err != nil {
+			if IsClosedError(err) {
+				Logger.Info("API server close")
+				return
+			} else {
+				Logger.ErrorE(err)
+				continue
+			}
+		}
+		go onConnection(conn)
+	}
+}
+
+func onConnection(conn net.Conn) {
 	defer func() {
 		Logger.InfoF("Close: %v\n", conn.RemoteAddr())
 		conn.Close()
@@ -55,132 +126,62 @@ func handleConnection(conn net.Conn) {
 		Logger.ErrorE(err)
 		return
 	}
-	switch req.Op {
-	case "create":
-		doCreate(&req)
-	case "delete":
-		doDelete(&req)
-	case "migrate":
+	switch req.Method {
+	case "deploy":
+		doDeployReq(&req)
+	case "remove":
+		doRemoveReq(&req)
+	case "_checkpoint":
 
 	default:
-		doUnsupported(&req)
+		doUnsupportedReq(&req)
 	}
 }
 
-func doCreate(req *Request) {
-	name := req.Create.Name
-	image := req.Create.Image
-	podName := req.Create.Name + "-pod"
-	containerName := req.Create.Name + "-c"
-	port := int32(req.Create.Port)
-	extPort := int32(req.Create.ExtPort)
-	env := req.Create.Env
-	serviceName := req.Create.Name + "-svc"
-	clusterIpName := req.Create.Name + "-cip"
-	clientset, _, err := NewClient()
-	if err != nil {
-		Logger.ErrorE(err)
-		return
-	}
-	clusterIP := ""
-	if req.Create.CreateApp {
-		if pod, err := CreatePod(
-			clientset,
-			podName,
-			name,
-			containerName,
-			image,
-			port,
-			env,
-		); err == nil {
-			Logger.Info("Created pod: " + pod.GetName())
+func argsToMap(args []string) map[string]string {
+	m := map[string]string{}
+	for _, v := range args {
+		a := strings.SplitN(v, "=", 2)
+		if len(a) == 1 {
+			m[a[0]] = ""
+		} else if len(a) == 2 {
+			m[a[0]] = a[1]
 		} else {
-			Logger.ErrorE(err)
-		}
-		if svc, err := GetService(clientset, serviceName); err == nil && svc.Spec.ClusterIP != "" {
-			Logger.Info("Use existing service: " + svc.GetName())
-			clusterIP = svc.Spec.ClusterIP
-		} else if svc, err := CreateService(
-			clientset,
-			serviceName,
-			name,
-			clusterIpName,
-			port,
-		); err == nil {
-			Logger.Info("Created service: " + svc.GetName())
-			clusterIP = svc.Spec.ClusterIP
-		} else {
-			Logger.ErrorE(err)
+			fmt.Fprintf(os.Stderr, "Warning: ignored arg: "+v)
 		}
 	}
-	if _, ok := fwdsvcs.Load(name); ok {
-		Logger.Info("Use existing forwarding service")
-	} else if !req.Create.CreateApp || clusterIP != "" {
-		var clientAddr *net.TCPAddr
-		var appAddr *net.TCPAddr
-		clientAddrStr := fmt.Sprintf(":%d", extPort)
-		var rErr error
-		clientAddr, rErr = net.ResolveTCPAddr("tcp", clientAddrStr)
-		if rErr != nil {
-			Logger.ErrorE(err)
-		}
-		if clusterIP != "" {
-			appAddrStr := fmt.Sprintf("%s:%d", clusterIP, port)
-			var err error
-			appAddr, err = net.ResolveTCPAddr("tcp", appAddrStr)
-			if err != nil {
-				Logger.ErrorE(err)
-			}
-		}
-		if f, err := StartForwardingService("tcp", clientAddr, appAddr); err == nil {
-			fwdsvcs.Store(name, f)
-		} else {
-			Logger.ErrorE(err)
-		}
-	} else {
-		Logger.Error("Error: forwarding service cannot not started because ClusterIP is unknown")
+	return m
+}
+
+func doDeployReq(req *Request) {
+	switch req.Deploy.Type {
+	case DeployTypeNew:
+		apiService.DeployNew(
+			req.Deploy.Name,
+			req.Deploy.NewApp.Image,
+			NewPortMap(req.Deploy.NewApp.Port.In, req.Deploy.NewApp.Port.Ext),
+			req.Deploy.NewApp.Env,
+		)
+	case DeployTypeFwd:
+		apiService.DeployFwd(
+			req.Deploy.Name,
+			req.Deploy.Fwd.SrcAddr,
+			NewPortMap(req.Deploy.Fwd.Port.In, req.Deploy.Fwd.Port.Ext),
+		)
+	default:
+		Logger.Error("Unsupported deploy type: " + req.Deploy.Type)
 	}
 }
 
-func doDelete(req *Request) {
-	name := req.Delete.Name
-	podName := req.Delete.Name + "-pod"
-	serviceName := req.Delete.Name + "-svc"
-	clientset, _, err := NewClient()
-	if err != nil {
-		Logger.ErrorE(err)
-		return
-	}
-	if v, ok := fwdsvcs.Load(name); ok {
-		if err := v.(*ForwardingService).Close(); err != nil {
-			Logger.ErrorE(err)
-		}
-		fwdsvcs.Delete(name)
-	}
-	if err := DeleteService(clientset, serviceName); err == nil {
-		Logger.Info("Deleted service: " + serviceName)
-	} else {
-		Logger.ErrorE(err)
-	}
-	if err := DeletePod(clientset, podName); err == nil {
-		Logger.Info("Deleted pod: " + podName)
-	} else {
-		Logger.ErrorE(err)
-	}
+func doRemoveReq(req *Request) {
+	name := req.Remove.Name
+	apiService.Remove(name)
 }
 
-// func doMigrate(req *Request) {
-// 	name := req.Migrate.Name
-// 	podName := name + "-pod"
-// 	srcAddr := req.Migrate.SrcAddr
-// }
+func doUnsupportedCmd(args []string) {
+	fmt.Println("Unsupported command: " + args[0])
+}
 
-// func doCheckpoint(req *Request) {
-// 	podName := req.Checkpoint.Name + "-pod"
-// 	imagesDir := req.Checkpoint.ImagesDir
-
-// }
-
-func doUnsupported(req *Request) {
-	Logger.Error("Unsupported operation: " + req.Op)
+func doUnsupportedReq(req *Request) {
+	Logger.Error("Unsupported request method: " + req.Method)
 }

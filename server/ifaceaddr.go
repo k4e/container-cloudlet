@@ -5,7 +5,7 @@ import (
 	"net"
 )
 
-func PrintInterfaceAddrs() {
+func PrintInterfaceAddrs(prefix string) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		panic(err)
@@ -24,7 +24,7 @@ func PrintInterfaceAddrs() {
 				ip = v.IP
 			}
 			if ip != nil && !ip.IsLoopback() {
-				fmt.Printf("%v\t= %v\n", iface.Name, ip.String())
+				fmt.Printf("%s%v\t= %v\n", prefix, iface.Name, ip.String())
 			}
 		}
 	}

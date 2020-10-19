@@ -8,7 +8,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -53,7 +52,12 @@ type SessionKey struct {
 	hostPort  int
 }
 
-func (p *SessionPool) Accept(ln* net.TCPListener, network string, appAddr *net.TCPAddr) error {
+func (p *SessionPool) Accept(
+	ln *net.TCPListener,
+	network string,
+	hostAddr *net.TCPAddr,
+	isExtHost bool,
+) error {
 	clientConn, err := ln.AcceptTCP()
 	if err != nil {
 		if !IsClosedError(err) {
@@ -68,27 +72,27 @@ func (p *SessionPool) Accept(ln* net.TCPListener, network string, appAddr *net.T
 		return err
 	}
 	Logger.Info("Header: " + head.String())
-	var hostAddr* net.TCPAddr
-	isHostFwd := false
-	fwdIp := head.DstIP
-	fwdPort := head.DstPort
-	if net.IPv4(0, 0, 0, 0).Equal(fwdIp) {
-		if appAddr == nil {
-			Logger.Warn("Fatal: requires dstIP:dstPort on a header because the app isn't created")
-		}
-		hostAddr = appAddr
-	} else {
-		if fwdPort == 0 {
-			return errors.New(fmt.Sprintf("missing port in address (HostAddr=%s)", hostAddr))
-		}
-		hostAddrStr := fmt.Sprintf("%s:%d", fwdIp.String(), fwdPort)
-		var err error
-		hostAddr, err = net.ResolveTCPAddr(network, hostAddrStr)
-		if err != nil {
-			return err
-		}
-		isHostFwd = true
-	}
+	// var hostAddr* net.TCPAddr
+	// isHostFwd := false
+	// fwdIp := head.DstIP
+	// fwdPort := head.DstPort
+	// if net.IPv4(0, 0, 0, 0).Equal(fwdIp) {
+	// 	if appAddr == nil {
+	// 		Logger.Warn("Fatal: requires dstIP:dstPort on a header because the app isn't created")
+	// 	}
+	// 	hostAddr = appAddr
+	// } else {
+	// 	if fwdPort == 0 {
+	// 		return errors.New(fmt.Sprintf("missing port in address (HostAddr=%s)", hostAddr))
+	// 	}
+	// 	hostAddrStr := fmt.Sprintf("%s:%d", fwdIp.String(), fwdPort)
+	// 	var err error
+	// 	hostAddr, err = net.ResolveTCPAddr(network, hostAddrStr)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	isHostFwd = true
+	// }
 	if hostAddr == nil {
 		return errors.New("HostAddr is empty")
 	}
@@ -103,17 +107,16 @@ func (p *SessionPool) Accept(ln* net.TCPListener, network string, appAddr *net.T
 		Logger.Info("Use existing session")
 	}
 	var headBytes []byte
-	if isHostFwd {
+	if isExtHost {
 		nextHead := ProtocolHeader{
 			SessionId: head.SessionId,
-			DstIP:     net.IPv4(0, 0, 0, 0),
-			DstPort:   0,
-			Flag:      head.Flag,
+			// DstIP:     net.IPv4(0, 0, 0, 0),
+			// DstPort:   0,
+			// Flag:      head.Flag,
 		}
 		headBytes = nextHead.Bytes()
 	}
-	go sesh.(*Session).Start(NewConnection(clientConn), network, hostAddr,
-			head.Resume(), headBytes)
+	go sesh.(*Session).Start(NewConnection(clientConn), network, hostAddr, false, headBytes)
 	return nil
 }
 
@@ -141,10 +144,10 @@ func NewSession(keep bool) *Session {
 
 func (p *Session) Start(
 	clientConn *Connection,
-	network    string,
-	hostAddr   *net.TCPAddr,
-	resume     bool,
-	headBytes  []byte,
+	network string,
+	hostAddr *net.TCPAddr,
+	resume bool,
+	headBytes []byte,
 ) {
 	p.setStreamsAlive(false)
 	defer func() {
@@ -332,7 +335,7 @@ func (p *Session) downstream(clientConn, hostConn *Connection, wg *sync.WaitGrou
 			if IsDeadlineExceeded(herr) {
 				continue
 			}
-			if (herr == io.EOF) {
+			if herr == io.EOF {
 				Logger.Info("downstream: host reached end")
 			} else {
 				Logger.ErrorE(herr)

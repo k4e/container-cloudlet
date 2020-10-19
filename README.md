@@ -93,22 +93,22 @@
 
 ### Client
 
-- Create a sample app on server
+- Deploy a new sample app on server
     ```
-    $ java -jar target/client.jar create $(sudo minikube ip) 9999
+    $ java -jar target/client.jar deploy new <addr>
+    ```
+
+- Deploy forwarding from server B to the app of Server A
+    ```
+    $ java -jar target/client.jar deploy fwd <B-addr> <A-addr>
     ```
 
 - Start a session to server
     ```
-    $ java -jar target/client.jar sesh $(sudo minikube ip) 30088
+    $ java -jar target/client.jar sesh <addr>
     ```
 
-- Start a session to server A via server B
+- Remove the sample app on server
     ```
-    $ java -jar target/client.jar sesh <B-ipaddr> 30088 -f <A-ipaddr>:30088
-    ```
-
-- Delete the sample app on server
-    ```
-    $ java -jar target/client.jar delete $(sudo minikube ip) 9999
+    $ java -jar target/client.jar remove <addr>
     ```
