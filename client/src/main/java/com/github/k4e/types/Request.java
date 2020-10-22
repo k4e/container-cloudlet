@@ -65,16 +65,19 @@ public class Request implements Serializable {
         }
         public static class LM implements Serializable {
             private static final long serialVersionUID = -4857209607926377458L;
+            public String image;
             public String srcAddr;
+            public String srcName;
             public Port port;
-            public LM(String srcAddr, Port port) {
+            public LM(String image, String srcAddr, String srcName, Port port) {
+                this.image = image;
                 this.srcAddr = srcAddr;
+                this.srcName = srcName;
                 this.port = port;
             }
         }
         public String name;
         public String type;
-        public String image;
         public NewApp newApp;
         public Fwd fwd;
         public LM lm;

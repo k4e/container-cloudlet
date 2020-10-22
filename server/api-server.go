@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-func StartAPIServer(chanClose chan interface{}) {
+func StartAPIServer(addr string, chanClose chan interface{}) {
 	var ln net.Listener
-	ln, err := net.Listen("tcp", APIServerLocalAddr)
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		panic(err)
 	}
@@ -29,64 +29,63 @@ func StartAPIServer(chanClose chan interface{}) {
 				continue
 			}
 		}
-		go onConnection(conn)
+		go handleConnection(conn)
 	}
 }
 
-func onConnection(conn net.Conn) {
+func handleConnection(conn net.Conn) {
 	defer func() {
 		Logger.InfoF("Close: %v\n", conn.RemoteAddr())
 		conn.Close()
 	}()
 	Logger.InfoF("Accept: %v\n", conn.RemoteAddr())
-	conn.SetReadDeadline(time.Now().Add(timeout * time.Second))
-	var bReq []byte
-	bReq, err := Readline(conn)
+	conn.SetReadDeadline(time.Now().Add(RequestTimeout * time.Second))
+	b, err := Readline(conn)
 	if err != nil {
 		Logger.ErrorE(err)
 		return
 	}
-	Logger.Info("Request: " + string(bReq))
+	Logger.Info("Request: " + string(b))
 	var req Request
-	if err := json.Unmarshal(bReq, &req); err != nil {
+	if err := json.Unmarshal(b, &req); err != nil {
 		Logger.ErrorE(err)
 		return
 	}
+	var resp *Response
 	switch req.Method {
 	case "deploy":
 		doDeployReq(&req)
 	case "remove":
 		doRemoveReq(&req)
 	case "_checkpoint":
-
+		resp = doCheckpointReq(&req)
 	default:
 		doUnsupportedReq(&req)
+	}
+	if resp != nil {
+		b, err := json.Marshal(resp)
+		if err != nil {
+			Logger.ErrorE(err)
+			return
+		}
+		_, err = conn.Write(b)
+		if err != nil {
+			Logger.ErrorE(err)
+			return
+		}
 	}
 }
 
 func doDeployReq(req *Request) {
-	switch req.Deploy.Type {
-	case DeployTypeNew:
-		apiService.DeployNew(
-			req.Deploy.Name,
-			req.Deploy.NewApp.Image,
-			NewPortMap(req.Deploy.NewApp.Port.In, req.Deploy.NewApp.Port.Ext),
-			req.Deploy.NewApp.Env,
-		)
-	case DeployTypeFwd:
-		apiService.DeployFwd(
-			req.Deploy.Name,
-			req.Deploy.Fwd.SrcAddr,
-			NewPortMap(req.Deploy.Fwd.Port.In, req.Deploy.Fwd.Port.Ext),
-		)
-	default:
-		Logger.Error("Unsupported deploy type: " + req.Deploy.Type)
-	}
+	TheAPICore.Deploy(req)
 }
 
 func doRemoveReq(req *Request) {
-	name := req.Remove.Name
-	apiService.Remove(name)
+	TheAPICore.Remove(req)
+}
+
+func doCheckpointReq(req *Request) *Response {
+	return TheAPICore.Checkpoint(req)
 }
 
 func doUnsupportedReq(req *Request) {

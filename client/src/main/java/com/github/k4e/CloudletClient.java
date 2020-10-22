@@ -29,7 +29,7 @@ public class CloudletClient {
             fwd = new Request.Deploy.Fwd(srcAddr, fwdPort);
         }
         if (type == Request.Deploy.Type.LM) {
-           lm = new Request.Deploy.LM(srcAddr, appPort);
+           lm = new Request.Deploy.LM(DEFAULT_IMAGE, srcAddr, DEFAULT_NAME, appPort);
         }
         return Request.deploy(new Request.Deploy(DEFAULT_NAME, type, newApp, fwd, lm));
     }

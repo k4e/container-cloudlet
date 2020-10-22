@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/pkg/errors"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
@@ -35,7 +39,7 @@ func ExecutePod(
 	req.VersionedParams(opt, scheme.ParameterCodec)
 	exec, err := remotecommand.NewSPDYExecutor(config, http.MethodPost, req.URL())
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	err = exec.Stream(remotecommand.StreamOptions{
 		Stdin:  stdin,
@@ -43,7 +47,63 @@ func ExecutePod(
 		Stderr: stderr,
 	})
 	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+func GetPodEnv(
+	clientset kubernetes.Interface,
+	config *rest.Config,
+	namespace string,
+	podName string,
+	containerName string,
+	stderr io.Writer,
+	env string,
+) (string, error) {
+	stdout := &bytes.Buffer{}
+	cmd := []string{"/bin/sh", "-c", fmt.Sprintf("echo ${%s}", env)}
+	if err := ExecutePod(clientset, config, namespace, podName, containerName,
+		nil, stdout, stderr, cmd...); err != nil {
+		return "", err
+	}
+	v := stdout.String()
+	return v, nil
+}
+
+func SetPodEnv(
+	clientset kubernetes.Interface,
+	config *rest.Config,
+	namespace string,
+	podName string,
+	containerName string,
+	stderr io.Writer,
+	env string,
+	value string,
+) error {
+	cmd := []string{"/bin/sh", "-c", fmt.Sprintf("export %s=%s", env, value)}
+	if err := ExecutePod(clientset, config, namespace, podName, containerName,
+		nil, nil, stderr, cmd...); err != nil {
 		return err
 	}
 	return nil
+}
+
+func ReadPodFile(
+	clientset kubernetes.Interface,
+	config *rest.Config,
+	namespace string,
+	podName string,
+	containerName string,
+	stderr io.Writer,
+	path string,
+) (string, error) {
+	stdout := &bytes.Buffer{}
+	cmd := []string{"/bin/sh", "-c", fmt.Sprintf("cat %s", path)}
+	if err := ExecutePod(clientset, config, namespace, podName, containerName,
+		nil, stdout, stderr, cmd...); err != nil {
+		return "", err
+	}
+	v := stdout.String()
+	return v, nil
 }

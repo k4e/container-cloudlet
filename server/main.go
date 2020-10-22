@@ -11,10 +11,12 @@ import (
 	"time"
 )
 
-const APIServerLocalAddr = ":9999"
-const timeout = 30
+const (
+	APIServerPort  = 9999
+	RequestTimeout = 30
+)
 
-var apiService *APIService
+var TheAPICore *APICore
 
 func main() {
 	interactive := false
@@ -28,12 +30,24 @@ func main() {
 			Logger.Warn("Warning: ignored arg: " + arg)
 		}
 	}
-	apiService = NewAPIService()
+	hostConf, err := LoadHostConf()
+	if err != nil {
+		panic(err)
+	}
+	hostAddr, err := GetInterfaceAddr(hostConf.HostNetworkInterface)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("This host network address: %s (%s)\n", hostAddr, hostConf.HostNetworkInterface)
+	TheAPICore = NewAPICore(hostConf, hostAddr)
 	fmt.Println("Interface IP addresses:")
-	PrintInterfaceAddrs("- ")
+	if err := PrintInterfaceAddrs("- "); err != nil {
+		panic(err)
+	}
+	apiServerAddr := fmt.Sprintf(":%d", APIServerPort)
 	chanClose := make(chan interface{})
-	go StartAPIServer(chanClose)
-	fmt.Println("API server is starting at: " + APIServerLocalAddr)
+	go StartAPIServer(apiServerAddr, chanClose)
+	fmt.Println("API server is starting at: " + apiServerAddr)
 	if interactive {
 		startCommandLine()
 	} else {
@@ -101,23 +115,13 @@ func doTunnelCmd(args []string) {
 	}
 	localAddr := args[1]
 	remoteAddr := args[2]
-	sshConf, err := LoadSSHConf("./sshconf.yaml")
+	sshClient, err := NewSSHClient(TheAPICore.HostConf)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	sshClient, err := NewSSHClient(sshConf)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
-	}
-	chanReady := make(chan struct{}, 1)
 	chanClose := make(chan struct{})
-	go func() {
-		<-chanReady
-		fmt.Println("SSH client ready")
-	}()
-	go sshClient.OpenTunnel(localAddr, remoteAddr, chanReady, chanClose)
+	sshClient.OpenTunnel(localAddr, remoteAddr, chanClose)
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	fmt.Println("Open SSH tunnel; Ctrl-C to abort")

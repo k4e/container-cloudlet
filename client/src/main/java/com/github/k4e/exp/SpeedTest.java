@@ -2,13 +2,19 @@ package com.github.k4e.exp;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.Random;
 import java.util.UUID;
 
 import com.github.k4e.CloudletClient;
 import com.github.k4e.types.ProtocolHeader;
+import com.github.k4e.types.Request;
+import com.google.common.base.Strings;
+import com.google.gson.Gson;
 
 public class SpeedTest {
 
@@ -21,67 +27,107 @@ public class SpeedTest {
     }
 
     public void exec(
-        String hostA,
-        String hostB,
+        String hostAddr,
+        Request.Deploy.Type type,
         int dataSizeKB,
         int count,
+        String srcAddr,
         boolean noWait,
         boolean fullCheck
-    ) throws IOException {
+    ) throws IOException, InterruptedException {
+        if ((type == Request.Deploy.Type.FWD || type == Request.Deploy.Type.LM)
+                && Strings.isNullOrEmpty(srcAddr)) {
+            throw new IllegalArgumentException("type is FWD|LM but srcAddr is empty");
+        }
         final int dataSizeBytes = dataSizeKB * 1024;
         if (count < 0) {
             count = DEFAULT_COUNT;
         }
+        Gson gson = new Gson();
+        ProtocolHeader header = ProtocolHeader.create(seshId);
+        byte headerBytes[] = header.getBytes();
+        String req = null;
+        if (type != null) {
+            Request r = CloudletClient.createAppSampleRequest(type, srcAddr);
+            req = gson.toJson(r);
+        }
+        // byte testData[] = "Hello_world ABCD".getBytes();
         byte[] data = generateBytes(dataSizeBytes);
         byte[] buf = new byte[dataSizeBytes * 4];
-        ProtocolHeader headerA = ProtocolHeader.create(seshId);
-        ProtocolHeader headerB = ProtocolHeader.create(seshId);
-        System.out.println("# --> Server A");
-        routine(hostA, CloudletClient.DEFAULT_APP_EXT_PORT, headerA, data, buf, count, fullCheck);
-        System.out.println("Wait for 4 sec");
-        if (!noWait) {
-            try {
-                Thread.sleep(4000);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
+        char[] cbuf = new char[4096];
+        int consistent = 0;
+        int inconsistent = 0;
+        System.out.println("--- Speed test start ---");
+        long timeline = 0;
+        long firstTime = System.nanoTime();
+        long startTime;
+        long endTime;
+        if (type != null) {    
+            System.out.println("Send deploy request to Cloudlet Controller");
+            try(Socket sockAPI = new Socket(hostAddr, CloudletClient.DEFAULT_CLOUDLET_PORT)) {
+                PrintWriter writer = new PrintWriter(sockAPI.getOutputStream());
+                writer.println(req);
+                writer.flush();
+                System.out.printf("Sent: %s\n", req);
+                InputStreamReader reader = new InputStreamReader(sockAPI.getInputStream());
+                int apiReadCount = reader.read(cbuf);
+                System.out.printf("Recv: %s\n", apiReadCount > 0 ? new String(cbuf, 0, apiReadCount) : "(none)");
             }
         }
-        System.out.println("# --> Server B");
-        routine(hostB, CloudletClient.DEFAULT_APP_EXT_PORT, headerB, data, buf, count, fullCheck);
-    }
-
-    private void routine(
-        String host,
-        int port,
-        ProtocolHeader header,
-        byte[] data,
-        byte[] buf,
-        int count,
-        boolean fullCheck
-    ) throws IOException {
-        long start, end;
-        int consistent = 0, inconsistent = 0;
-        Socket sock = null;
+        // System.out.print("Connect to Session Service");
+        // while (true) {
+        //     System.out.print(".");
+        //     int appReadCnt = 0;
+        //     boolean connReset = false;
+        //     try (Socket sockApp = new Socket(hostAddr, CloudletClient.DEFAULT_APP_EXT_PORT)) {
+        //         OutputStream out = sockApp.getOutputStream();
+        //         InputStream in = sockApp.getInputStream();
+        //         out.write(headerBytes);
+        //         out.flush();
+        //         out.write(testData);
+        //         out.flush();
+        //         appReadCnt = in.read(buf);
+        //     } catch (SocketException e) {
+        //         if (e.getMessage().contains("Connection reset")) {
+        //             connReset = true;
+        //         } else {
+        //             throw e;
+        //         }
+        //     }
+        //     if (connReset || appReadCnt < 0) {
+        //         Thread.sleep(100);
+        //         continue;
+        //     } else if (appReadCnt > 0) {
+        //         byte readData[] = Arrays.copyOfRange(buf, 0, appReadCnt);
+        //         String testDataStr = new String(testData);
+        //         String readDataStr = new String(readData);
+        //         System.out.println();
+        //         if (Arrays.equals(testData, readData)) {
+        //             System.out.printf("OK: wrote: %s, read: %s\n", testDataStr, readDataStr);
+        //         } else {
+        //             System.out.printf("FAIL: wrote: %s, read: %s\n", testDataStr, readDataStr);
+        //         }
+        //         break;
+        //     }
+        // }
+        endTime = System.nanoTime();
+        System.out.println("CreationTime (ms): " + (endTime - firstTime) / 1000000);
+        System.out.println("Proceed to throughput test");
+        Socket sockApp = new Socket();
         try {
-            start = System.nanoTime();
-            sock = new Socket(host, port);
-            OutputStream out = sock.getOutputStream();
-            InputStream in = sock.getInputStream();
-            byte[] headBytes = header.getBytes();
-            start = System.nanoTime();
-            out.write(headBytes);
+            sockApp.connect(new InetSocketAddress(hostAddr, CloudletClient.DEFAULT_APP_EXT_PORT));
+            OutputStream out = sockApp.getOutputStream();
+            InputStream in = sockApp.getInputStream();
+            out.write(headerBytes);
             out.flush();
-            byte[] pollData = new byte[] {0};
-            out.write(pollData);
-            in.read(buf);
-            end = System.nanoTime();
-            System.out.println("Connection time: " + (end - start));
             for (int i = 0; i < count; ++i) {
-                start = System.nanoTime();
+                int wroteSz, readSz;
+                startTime = System.nanoTime();
+                timeline = startTime - firstTime;
                 out.write(data);
                 out.flush();
-                int wroteSz = data.length;
-                int readSz = 0;
+                wroteSz = data.length;
+                readSz = 0;
                 while (readSz < wroteSz) {
                     int n = in.read(buf, readSz, buf.length - readSz);
                     if (n <= 0) {
@@ -90,8 +136,12 @@ public class SpeedTest {
                     }
                     readSz += n;
                 }
-                end = System.nanoTime();
-                System.out.println(end - start);
+                endTime = System.nanoTime();
+                long timelineMs = timeline / 1000000;
+                long elapsed = endTime - startTime;
+                long elapsedMs = (endTime - startTime) / 1000000;
+                double throughput = ((double)dataSizeKB / ((double)elapsed / 1000000000.));
+                System.out.printf("%d\t%d\t%f\n", timelineMs, elapsedMs, throughput);
                 boolean sizeTest;
                 if (wroteSz == readSz) {
                     sizeTest = true;
@@ -117,12 +167,11 @@ public class SpeedTest {
                 }
             }
         } finally {
-            System.out.printf("Test result: consistent: %d, inconsistent: %d, full-check: %s\n",
-                    consistent, inconsistent, String.valueOf(fullCheck));
-            if (sock != null) {
-                sock.close();
-            }
+            sockApp.close();
         }
+        System.out.printf("Test result: consistent: %d, inconsistent: %d, full-check: %s\n",
+                    consistent, inconsistent, String.valueOf(fullCheck));
+        System.out.printf("May clean up the server: run with args: remove %s\n", hostAddr);
     }
 
     private byte[] generateBytes(int b) {

@@ -5,56 +5,33 @@ import (
 	"io/ioutil"
 	"net"
 
+	"github.com/pkg/errors"
 	"golang.org/x/crypto/ssh"
-	"gopkg.in/yaml.v2"
 )
-
-type SSHConf struct {
-	SSHLocalServerAddr string `yaml:"sshLocalServerAddr"`
-	SSHUser            string `yaml:"sshUser"`
-	SSHKeyPath         string `yaml:"sshKeyPath"`
-}
-
-func LoadSSHConf(path string) (*SSHConf, error) {
-	b, err := ioutil.ReadFile(path)
-	if err != nil {
-		Logger.Error("SSHClient: fail to read SSH config file")
-		return nil, err
-	}
-	sshConf := &SSHConf{}
-	err = yaml.Unmarshal(b, sshConf)
-	if err != nil {
-		Logger.Error("SSHClient: fail to unmarshal yaml file")
-		return nil, err
-	}
-	return sshConf, nil
-}
 
 type SSHClient struct {
 	localServerAddr string
 	clientConfig    *ssh.ClientConfig
 }
 
-func NewSSHClient(sshConf *SSHConf) (*SSHClient, error) {
-	key, err := ioutil.ReadFile(sshConf.SSHKeyPath)
+func NewSSHClient(hostConf *HostConf) (*SSHClient, error) {
+	key, err := ioutil.ReadFile(hostConf.SSHKeyPath)
 	if err != nil {
-		Logger.Error("SSHClient: fail to read SSH private key")
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 	signer, err := ssh.ParsePrivateKey(key)
 	if err != nil {
-		Logger.Error("SSHClient: fail to parse SSH private key")
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 	clientConfig := &ssh.ClientConfig{
-		User: sshConf.SSHUser,
+		User: hostConf.SSHUser,
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(signer),
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 	return &SSHClient{
-		localServerAddr: sshConf.SSHLocalServerAddr,
+		localServerAddr: hostConf.SSHLocalServerAddr,
 		clientConfig:    clientConfig,
 	}, nil
 }
@@ -62,63 +39,64 @@ func NewSSHClient(sshConf *SSHConf) (*SSHClient, error) {
 func (p *SSHClient) OpenTunnel(
 	localAddr string,
 	remoteAddr string,
-	chanReady chan struct{},
-	chanClose chan struct{},
+	closeChan chan struct{},
 ) error {
 	sshClientConn, err := ssh.Dial("tcp", p.localServerAddr, p.clientConfig)
 	if err != nil {
-		Logger.ErrorE(err)
-		return err
+		return errors.WithStack(err)
 	}
-	defer func() {
+	Logger.Info("Open SSH client")
+	go func() {
+		<-closeChan
 		Logger.Info("Close SSH client")
 		sshClientConn.Close()
 	}()
 	ln, err := net.Listen("tcp", localAddr)
 	if err != nil {
-		Logger.ErrorE(err)
-		return err
+		return errors.WithStack(err)
 	}
 	listening := true
 	go func() {
-		<-chanClose
+		<-closeChan
 		listening = false
 		ln.Close()
 	}()
-	chanReady <- struct{}{}
-	for listening {
-		localConn, err := ln.Accept()
-		if err != nil {
-			if IsClosedError(err) {
-				break
-			} else {
-				Logger.ErrorE(err)
-				return err
-			}
-		}
-		go func() {
-			Logger.InfoF("Open SSH tunnel path: %s <--> %s\n", localAddr, remoteAddr)
-			remoteConn, err := sshClientConn.Dial("tcp", remoteAddr)
+	go func() {
+		for listening {
+			localConn, err := ln.Accept()
 			if err != nil {
-				Logger.ErrorE(err)
+				if IsClosedError(err) {
+					return
+				} else {
+					Logger.ErrorE(err)
+					return
+				}
 			}
 			go func() {
-				<-chanClose
-				Logger.InfoF("Close SSH tunnel path: %s <--> %s\n", localAddr, remoteAddr)
-				localConn.Close()
-				remoteConn.Close()
-			}()
-			go func() {
-				if _, err := io.Copy(remoteConn, localConn); err != nil {
+				Logger.InfoF("Open SSH tunnel route: %s <--> %s\n", localAddr, remoteAddr)
+				remoteConn, err := sshClientConn.Dial("tcp", remoteAddr)
+				if err != nil {
 					Logger.ErrorE(err)
+					return
 				}
+				go func() {
+					<-closeChan
+					Logger.InfoF("Close SSH tunnel route: %s <--> %s\n", localAddr, remoteAddr)
+					localConn.Close()
+					remoteConn.Close()
+				}()
+				go func() {
+					if _, err := io.Copy(remoteConn, localConn); err != nil {
+						Logger.ErrorE(err)
+					}
+				}()
+				go func() {
+					if _, err := io.Copy(localConn, remoteConn); err != nil {
+						Logger.ErrorE(err)
+					}
+				}()
 			}()
-			go func() {
-				if _, err := io.Copy(localConn, remoteConn); err != nil {
-					Logger.ErrorE(err)
-				}
-			}()
-		}()
-	}
+		}
+	}()
 	return nil
 }
