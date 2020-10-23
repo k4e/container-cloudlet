@@ -94,7 +94,7 @@ func (p *LM_Restore) Exec() error {
 	startTime = time.Now()
 	if err := ExecutePod(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName,
 		nil, os.Stdout, os.Stderr, "/bin/sh", "-c", fmt.Sprintf(
-			"unshare -p -m --fork --mount-proc criu restore --images-dir %s/final --tcp-established --shell-job -vvvv &",
+			"unshare -p -m --fork --mount-proc criu restore --images-dir %s/final --tcp-established --shell-job &",
 			LM_DumpImagesDir)); err != nil {
 		return err
 	}
