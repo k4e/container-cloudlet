@@ -57,8 +57,8 @@ func handleConnection(conn net.Conn) {
 		doDeployReq(&req)
 	case "remove":
 		doRemoveReq(&req)
-	case "_checkpoint":
-		resp = doCheckpointReq(&req)
+	case "_dumpStart":
+		resp = doDumpStartReq(&req)
 	default:
 		doUnsupportedReq(&req)
 	}
@@ -84,8 +84,8 @@ func doRemoveReq(req *Request) {
 	TheAPICore.Remove(req)
 }
 
-func doCheckpointReq(req *Request) *Response {
-	return TheAPICore.Checkpoint(req)
+func doDumpStartReq(req *Request) *Response {
+	return TheAPICore.DumpStart(req)
 }
 
 func doUnsupportedReq(req *Request) {

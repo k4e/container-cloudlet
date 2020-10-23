@@ -51,7 +51,7 @@ public class App {
         String host = args[2];
         Request.Deploy.Type ctype = Request.Deploy.Type.valueOfIgnoreCase(type);
         if (ctype == null) {
-            System.err.printf("Unsupported deploy type: " + type);
+            System.err.println("Unsupported deploy type: " + type);
             System.exit(-1);
         }
         String srcAddr = null;

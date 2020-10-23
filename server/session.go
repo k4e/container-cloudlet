@@ -20,7 +20,7 @@ import (
 const KeepSec = 60.
 const TimeoutDuration = 1000 * time.Millisecond
 const RetryInterval = 1000 * time.Millisecond
-const BufferSize = 1024 * 1024
+const BufferSize = 32 * 1024 * 1024
 
 func IsDeadlineExceeded(err error) bool {
 	nerr, ok := err.(net.Error)
@@ -59,13 +59,12 @@ func (p *SessionPool) Accept(
 		}
 		return nil
 	}
-	Logger.Info("Accept: " + clientConn.RemoteAddr().String())
-	Logger.Info("Default buffer size")
+	Logger.Debug("Accept: " + clientConn.RemoteAddr().String())
 	head, err := ReadProtocolHeader(clientConn)
 	if err != nil {
 		return err
 	}
-	Logger.Info("Header: " + head.String())
+	Logger.Debug("Header: " + head.String())
 	// var hostAddr* net.TCPAddr
 	// isHostFwd := false
 	// fwdIp := head.DstIP
@@ -96,9 +95,9 @@ func (p *SessionPool) Accept(
 	key := SessionKey{head.SessionId, hostAddr.IP.String(), hostAddr.Port}
 	sesh, ok := p.seshs.LoadOrStore(key, NewSession(true))
 	if !ok {
-		Logger.Info("New session")
+		Logger.Debug("New session")
 	} else {
-		Logger.Info("Use existing session")
+		Logger.Debug("Use existing session")
 	}
 	var headBytes []byte
 	if isExtHost {
@@ -154,13 +153,13 @@ func (p *Session) Start(
 		conn, err := net.DialTCP(network, nil, hostAddr)
 		if err != nil {
 			Logger.ErrorE(err)
-			Logger.Info("Client close")
+			Logger.Debug("Client close")
 			if err := clientConn.Close(); err != nil {
 				Logger.Warn("Warning: clientConn.Close: " + err.Error())
 			}
 			return
 		}
-		Logger.Info("Host open")
+		Logger.Debug("Host open")
 		hostConn = NewConnection(conn)
 		if len(headBytes) > 0 {
 			hostConn.Write(headBytes)
@@ -202,7 +201,7 @@ func (p *Session) setDownstreamAlive(b bool) {
 
 func (p *Session) upstream(clientConn, hostConn *Connection, wg *sync.WaitGroup) {
 	defer func() {
-		Logger.Info("upstream: finish")
+		Logger.Debug("upstream: finish")
 		p.setUpstreamAlive(false)
 		if wg != nil {
 			wg.Done()
@@ -227,7 +226,7 @@ func (p *Session) upstream(clientConn, hostConn *Connection, wg *sync.WaitGroup)
 					Logger.Warn("Warning: hostConn.SetWriteDeadline: " + err.Error())
 				}
 				m, herr := hostConn.Write(p.upBuf[p.upBufLB:p.upBufUB])
-				Logger.DebugF("upstream: Wrote: %s", p.upBuf[p.upBufLB:p.upBufUB])
+				Logger.TraceF("upstream: Wrote: %s", p.upBuf[p.upBufLB:p.upBufUB])
 				p.upBufLB += m
 				if herr != nil {
 					if IsDeadlineExceeded(herr) {
@@ -245,7 +244,7 @@ func (p *Session) upstream(clientConn, hostConn *Connection, wg *sync.WaitGroup)
 			if IsDeadlineExceeded(cerr) {
 				continue
 			} else if (cerr == io.EOF) || IsClosedError(cerr) {
-				Logger.Info("upstream: client reached end")
+				Logger.Debug("upstream: client reached end")
 				return
 				// first := !ct.isRunning()
 				// if p.keep && ct.runContinue() {
@@ -268,7 +267,7 @@ func (p *Session) upstream(clientConn, hostConn *Connection, wg *sync.WaitGroup)
 
 func (p *Session) downstream(clientConn, hostConn *Connection, wg *sync.WaitGroup) {
 	defer func() {
-		Logger.Info("downstream: finish")
+		Logger.Debug("downstream: finish")
 		p.setDownstreamAlive(false)
 		if wg != nil {
 			wg.Done()
@@ -296,13 +295,13 @@ func (p *Session) downstream(clientConn, hostConn *Connection, wg *sync.WaitGrou
 					Logger.Warn("Warning: clientConn.SetWriteDeadline: " + err.Error())
 				}
 				m, cerr := clientConn.Write(p.downBuf[p.downBufLB:p.downBufUB])
-				Logger.DebugF("downstream: Wrote: %s\n", p.downBuf[p.downBufLB:p.downBufUB])
+				Logger.TraceF("downstream: Wrote: %s\n", p.downBuf[p.downBufLB:p.downBufUB])
 				p.downBufUB += m
 				if cerr != nil {
 					if IsDeadlineExceeded(cerr) {
 						continue
 					} else if IsClosedError(cerr) {
-						Logger.Info("downstream: client is close")
+						Logger.Debug("downstream: client is close")
 						return
 						// first := !ct.isRunning()
 						// if p.keep && ct.runContinue() {
@@ -330,7 +329,7 @@ func (p *Session) downstream(clientConn, hostConn *Connection, wg *sync.WaitGrou
 				continue
 			}
 			if herr == io.EOF {
-				Logger.Info("downstream: host reached end")
+				Logger.Debug("downstream: host reached end")
 			} else {
 				Logger.ErrorE(herr)
 			}

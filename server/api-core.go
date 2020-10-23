@@ -168,11 +168,11 @@ func (p *APICore) DeployLM(req *Request) {
 	}
 }
 
-func (p *APICore) Checkpoint(req *Request) *Response {
+func (p *APICore) DumpStart(req *Request) *Response {
 	namespace := "default"
-	name := req.Checkpoint.Name
+	name := req.DumpStart.Name
 	srcHostAddr := p.HostAddr
-	dstHostAddr := req.Checkpoint.DstAddr
+	dstHostAddr := req.DumpStart.DstAddr
 	podName := ToPodName(name)
 	containerName := ToContainerName(name)
 	clientset, config, err := NewClient()
@@ -180,7 +180,7 @@ func (p *APICore) Checkpoint(req *Request) *Response {
 		Logger.ErrorE(err)
 		return &Response{Ok: false, Msg: err.Error()}
 	}
-	checkpoint := &LM_Checkpoint{
+	dump := &LM_DumpService{
 		Clientset:     clientset,
 		RestConfig:    config,
 		ThisAddr:      srcHostAddr,
@@ -189,7 +189,7 @@ func (p *APICore) Checkpoint(req *Request) *Response {
 		ContainerName: containerName,
 		DstAddr:       dstHostAddr,
 	}
-	if err := checkpoint.Exec(); err != nil {
+	if err := dump.Start(); err != nil {
 		Logger.ErrorE(err)
 		return &Response{Ok: false, Msg: err.Error()}
 	}

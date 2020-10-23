@@ -39,10 +39,10 @@ type Request struct {
 	Remove struct {
 		Name string `json:"name"`
 	} `json:"remove"`
-	Checkpoint RequestCheckpoint `json:"_checkpoint"`
+	DumpStart RequestDumpStart `json:"_startDump"`
 }
 
-type RequestCheckpoint struct {
+type RequestDumpStart struct {
 	Name    string `json:"name"`
 	DstAddr string `json:"dstAddr"`
 }

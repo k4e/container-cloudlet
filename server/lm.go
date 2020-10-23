@@ -3,9 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 	"k8s.io/client-go/kubernetes"
@@ -13,13 +16,20 @@ import (
 )
 
 const (
-	LMRsyncModuleName        = "tmp"
-	LMRsyncModuleDirectory   = "/tmp"
-	LMCheckpointImagesDir    = "/tmp/cloudlet.lm/images"
-	HostLiveMigrationPort    = 19999
-	PodCheckpointRestorePort = 19999
-	PodRsyncPort             = 873
-	MainPidFilePath          = "/MAIN_PID"
+	LM_HostMsgPort          = 19998
+	LM_HostDataPort         = 19999
+	LM_PodRsyncPort         = 873
+	LM_DumpImagesDir        = "/tmp/cloudlet-live-migration/images"
+	LM_RsyncModuleName      = "tmp"
+	LM_RsyncModuleDirectory = "/tmp"
+	MainPidFilePath         = "/MAIN_PID"
+)
+
+const (
+	LM_MsgReqPreDump = 0x01
+	LM_MsgReqDump    = 0x02
+	LM_MsgRespOk     = 0x00
+	LM_MsgRespError  = 0xFF
 )
 
 func GetRestorePodCommand() ([]string, []string) {
@@ -40,55 +50,63 @@ type LM_Restore struct {
 }
 
 func (p *LM_Restore) Exec() error {
-	k8sPortFwdCloseChan := make(chan struct{})
-	closeK8sPortFwd := func() {
-		if k8sPortFwdCloseChan != nil {
-			close(k8sPortFwdCloseChan)
-			k8sPortFwdCloseChan = nil
-		}
-	}
-	defer closeK8sPortFwd()
-	Logger.Debug("[Restore] open kube port-forward")
-	if err := OpenKubePortForwardReady(p.RestConfig, p.DstNamespace, p.DstPodName,
-		HostLiveMigrationPort, PodRsyncPort, os.Stdout, os.Stderr, k8sPortFwdCloseChan); err != nil {
+	var startTime time.Time
+	var endTime time.Time
+	Logger.Debug("[Restore] Exec rsync --daemon")
+	if err := ExecutePod(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName,
+		nil, os.Stdout, os.Stderr, "/bin/sh", "-c", "rsync --daemon"); err != nil {
 		return err
 	}
-	Logger.Debug("[Restore] exec mkdir")
-	if err := ExecutePod(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName, nil, os.Stdout, os.Stderr,
-		"/bin/sh", "-c", fmt.Sprintf("mkdir -p %s", LMCheckpointImagesDir)); err != nil {
-		return err
-	}
-	Logger.Debug("[Restore] exec rsync --daemon")
-	if err := ExecutePod(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName, nil, os.Stdout, os.Stderr,
-		"/bin/sh", "-c", "rsync --daemon"); err != nil {
-		return err
-	}
-	Logger.Debug("[Restore] send checkpoint request")
-	if resp, err := p.sendCheckpointRequest(); err != nil {
+	Logger.Debug("[Restore] Send DumpStart request")
+	if resp, err := p.sendDumpStartRequest(); err != nil {
 		return err
 	} else if !resp.Ok {
-		return errors.New("Checkpoint response error: " + resp.Msg)
+		return errors.New("DumpStart response error: " + resp.Msg)
 	}
-	// if err := ExecutePod(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName, nil, &p.log, &p.log,
-	// 	"/bin/sh", "-c", fmt.Sprintf(
-	// 		"criu lazy-pages --images-dir %s --page-server --address %s --port %d >%s/lazy-pages.log 2>&1 &",
-	// 		LMCheckpointImagesDir, p.ThisAddr, HostLiveMigrationPort, LMLogDir)); err != nil {
-	// 	return err
-	// }
-	Logger.Debug("[Restore] exec unshare criu restore")
-	if err := ExecutePod(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName, nil, os.Stdout, os.Stderr,
-		"/bin/sh", "-c", fmt.Sprintf(
-			"unshare -p -m --fork --mount-proc criu restore --images-dir %s --tcp-established --shell-job &",
-			LMCheckpointImagesDir)); err != nil {
+	dumpServiceAddr := fmt.Sprintf("%s:%d", p.SrcAddr, LM_HostMsgPort)
+	conn, err := net.Dial("tcp", dumpServiceAddr)
+	if err != nil {
 		return err
 	}
+	defer conn.Close()
+	k8sPortFwdCloseChan := make(chan struct{})
+	defer close(k8sPortFwdCloseChan)
+	Logger.Debug("[Restore] Open kube port-forward")
+	if err := OpenKubePortForwardReady(p.RestConfig, p.DstNamespace, p.DstPodName,
+		LM_HostDataPort, LM_PodRsyncPort, os.Stdout, os.Stderr, k8sPortFwdCloseChan); err != nil {
+		return err
+	}
+	Logger.Debug("[Restore] Send pre-dump request")
+	startTime = time.Now()
+	if err := p.sendDumpServiceRequest(conn, LM_MsgReqPreDump); err != nil {
+		return err
+	}
+	endTime = time.Now()
+	Logger.DebugF("[Restore] Pre-dump time (ns): %d\n", endTime.Sub(startTime).Nanoseconds())
+	Logger.Debug("[Restore] Send final dump request")
+	startTime = time.Now()
+	if err := p.sendDumpServiceRequest(conn, LM_MsgReqDump); err != nil {
+		return err
+	}
+	endTime = time.Now()
+	Logger.DebugF("[Restore] Final dump time (ns): %d\n", endTime.Sub(startTime).Nanoseconds())
+	Logger.Debug("[Restore] Exec unshare criu restore")
+	startTime = time.Now()
+	if err := ExecutePod(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName,
+		nil, os.Stdout, os.Stderr, "/bin/sh", "-c", fmt.Sprintf(
+			"unshare -p -m --fork --mount-proc criu restore --images-dir %s/final --tcp-established --shell-job -vvvv &",
+			LM_DumpImagesDir)); err != nil {
+		return err
+	}
+	endTime = time.Now()
+	Logger.DebugF("[Restore] Restore time (ns): %d\n", endTime.Sub(startTime).Nanoseconds())
 	return nil
 }
 
-func (p *LM_Restore) sendCheckpointRequest() (*Response, error) {
+func (p *LM_Restore) sendDumpStartRequest() (*Response, error) {
 	req := &Request{
-		Method: "_checkpoint",
-		Checkpoint: RequestCheckpoint{
+		Method: "_dumpStart",
+		DumpStart: RequestDumpStart{
 			Name:    p.SrcName,
 			DstAddr: p.ThisAddr,
 		},
@@ -118,7 +136,32 @@ func (p *LM_Restore) sendCheckpointRequest() (*Response, error) {
 	return &resp, nil
 }
 
-type LM_Checkpoint struct {
+func (p *LM_Restore) sendDumpServiceRequest(conn net.Conn, req byte) error {
+	reqbuf := []byte{req}
+	respbuf := make([]byte, 1)
+	var err error
+	for {
+		if n, err := conn.Write(reqbuf); n > 0 || err != nil {
+			break
+		}
+	}
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	for {
+		if n, err := conn.Read(respbuf); n > 0 || err != nil {
+			break
+		}
+	}
+	if err != nil {
+		return errors.WithStack(err)
+	} else if respbuf[0] != LM_MsgRespOk {
+		return errors.New("Dump service respond an error")
+	}
+	return nil
+}
+
+type LM_DumpService struct {
 	Clientset     kubernetes.Interface
 	RestConfig    *rest.Config
 	ThisAddr      string
@@ -128,53 +171,133 @@ type LM_Checkpoint struct {
 	DstAddr       string
 }
 
-func (p *LM_Checkpoint) Exec() error {
-	sshCloseChan := make(chan struct{})
-	closeSSH := func() {
-		if sshCloseChan != nil {
-			close(sshCloseChan)
-			sshCloseChan = nil
-		}
+func (p *LM_DumpService) Start() (reterr error) {
+	lnAddr := fmt.Sprintf(":%d", LM_HostMsgPort)
+	lnTCPAddr, err := net.ResolveTCPAddr("tcp", lnAddr)
+	if err != nil {
+		return err
 	}
-	defer closeSSH()
+	Logger.Debug("[Dump] Open message listener")
+	ln, err := net.ListenTCP("tcp", lnTCPAddr)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if reterr != nil {
+			ln.Close()
+		}
+	}()
 	sshClient, err := NewSSHClient(TheAPICore.HostConf)
 	if err != nil {
 		return err
 	}
-	hostEndAddr := fmt.Sprintf("%s:%d", p.ThisAddr, HostLiveMigrationPort)
-	remoteEndAddr := fmt.Sprintf("%s:%d", p.DstAddr, HostLiveMigrationPort)
-	Logger.Debug("[Checkpoint] open SSH tunnel")
+	hostEndAddr := fmt.Sprintf("%s:%d", p.ThisAddr, LM_HostDataPort)
+	remoteEndAddr := fmt.Sprintf("%s:%d", p.DstAddr, LM_HostDataPort)
+	sshCloseChan := make(chan struct{})
+	defer func() {
+		if reterr != nil {
+			close(sshCloseChan)
+		}
+	}()
+	Logger.Debug("[Dump] Open SSH tunnel")
 	if err := sshClient.OpenTunnel(hostEndAddr, remoteEndAddr, sshCloseChan); err != nil {
 		return err
 	}
-	Logger.Debug("[Checkpoint] exec mkdir")
-	if err := ExecutePod(p.Clientset, p.RestConfig, p.Namespace, p.PodName, p.ContainerName, nil, os.Stdout, os.Stderr,
-		"/bin/sh", "-c", fmt.Sprintf("mkdir -p %s", LMCheckpointImagesDir)); err != nil {
-		return err
-	}
-	Logger.Debug("[Checkpoint] get main pid")
+	Logger.Debug("[Dump] Get main pid")
 	pid, err := p.getMainPid()
 	if err != nil {
 		return err
 	}
-	Logger.Debug("[Checkpoint] exec criu dump")
-	if err := ExecutePod(p.Clientset, p.RestConfig, p.Namespace, p.PodName, p.ContainerName, nil, os.Stdout, os.Stderr,
-		"/bin/sh", "-c", fmt.Sprintf(
-			"criu dump --tree %d --images-dir %s --tcp-established --shell-job",
-			pid, LMCheckpointImagesDir)); err != nil {
-		return err
-	}
-	Logger.Debug("[Checkpoint] exec rsync")
-	if err := ExecutePod(p.Clientset, p.RestConfig, p.Namespace, p.PodName, p.ContainerName, nil, os.Stdout, os.Stderr,
-		"/bin/sh", "-c", fmt.Sprintf(
-			"rsync -rlOtcv %s/ rsync://%s:%d/%s",
-			LMRsyncModuleDirectory, p.ThisAddr, HostLiveMigrationPort, LMRsyncModuleName)); err != nil {
-		return err
-	}
+	go func() {
+		defer func() {
+			close(sshCloseChan)
+			ln.Close()
+		}()
+		conn, err := ln.Accept()
+		if err != nil {
+			Logger.ErrorE(errors.WithStack(err))
+			return
+		}
+		defer conn.Close()
+		reqbuf := make([]byte, 1)
+		for itercnt := 1; true; itercnt++ {
+			var n int
+			var err error
+			for {
+				if n, err = conn.Read(reqbuf); n > 0 || err != nil {
+					break
+				}
+			}
+			if err != nil {
+				if err == io.EOF {
+					Logger.Debug("[Dump][svc] Received EOF")
+				} else {
+					Logger.ErrorE(errors.WithStack(err))
+				}
+				return
+			}
+			req := reqbuf[0]
+			var resp byte
+			if req == LM_MsgReqPreDump {
+				argb := strings.Builder{}
+				fmt.Fprintf(&argb, "mkdir -p %s/%d", LM_DumpImagesDir, itercnt)
+				imagesDir := fmt.Sprintf("%s/%d", LM_DumpImagesDir, itercnt)
+				prevImagesDirOpt := ""
+				if itercnt > 1 {
+					prevImagesDirOpt = fmt.Sprintf("--prev-images-dir ../%d", itercnt-1)
+				}
+				fmt.Fprintf(&argb, " && criu pre-dump --tree %d --images-dir %s %s --tcp-established --shell-job",
+					pid, imagesDir, prevImagesDirOpt)
+				fmt.Fprintf(&argb, " && rsync -rlOt %s/ rsync://%s:%d/%s",
+					LM_RsyncModuleDirectory, p.ThisAddr, LM_HostDataPort, LM_RsyncModuleName)
+				Logger.Debug("[Dump][svc] Exec mkdir && criu pre-dump && rsync")
+				if err := ExecutePod(p.Clientset, p.RestConfig, p.Namespace, p.PodName, p.ContainerName,
+					nil, os.Stdout, os.Stderr, "/bin/sh", "-c", argb.String()); err != nil {
+					Logger.ErrorE(errors.WithStack(err))
+					resp = LM_MsgRespError
+				} else {
+					resp = LM_MsgRespOk
+				}
+			} else if req == LM_MsgReqDump {
+				argb := strings.Builder{}
+				fmt.Fprintf(&argb, "mkdir -p %s/final", LM_DumpImagesDir)
+				imagesDir := fmt.Sprintf("%s/final", LM_DumpImagesDir)
+				prevImagesDirOpt := ""
+				if itercnt > 1 {
+					prevImagesDirOpt = fmt.Sprintf("--prev-images-dir ../%d", itercnt-1)
+				}
+				fmt.Fprintf(&argb, " && criu dump --tree %d --images-dir %s %s --tcp-established --shell-job --track-mem",
+					pid, imagesDir, prevImagesDirOpt)
+				fmt.Fprintf(&argb, " && rsync -rlOt %s/ rsync://%s:%d/%s",
+					LM_RsyncModuleDirectory, p.ThisAddr, LM_HostDataPort, LM_RsyncModuleName)
+				Logger.Debug("[Dump][svc] Exec mkdir && criu dump && rsync")
+				if err := ExecutePod(p.Clientset, p.RestConfig, p.Namespace, p.PodName, p.ContainerName,
+					nil, os.Stdout, os.Stderr, "/bin/sh", "-c", argb.String()); err != nil {
+					Logger.ErrorE(errors.WithStack(err))
+					resp = LM_MsgRespError
+				} else {
+					resp = LM_MsgRespOk
+				}
+			} else {
+				Logger.ErrorF("[Dump][svc] Unexpected message: %x\n", req)
+				resp = LM_MsgRespError
+			}
+			respbuf := []byte{resp}
+			for {
+				if n, err = conn.Write(respbuf); n > 0 || err != nil {
+					break
+				}
+			}
+			if err != nil {
+				Logger.ErrorE(errors.WithStack(err))
+				return
+			}
+		}
+	}()
 	return nil
 }
 
-func (p *LM_Checkpoint) getMainPid() (int, error) {
+func (p *LM_DumpService) getMainPid() (int, error) {
 	v, err := ReadPodFile(p.Clientset, p.RestConfig, p.Namespace, p.PodName, p.ContainerName, os.Stderr,
 		MainPidFilePath)
 	if err != nil {

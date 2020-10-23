@@ -7,16 +7,22 @@ import (
 	"runtime"
 )
 
+const (
+	VerbosityInfo = 0
+	VerbosityDebug = 1
+	VerbosityTrace = 2
+)
+
 type SLog struct {
-	verbose bool
+	Verbosity int
 }
 
 var Logger = SLog{
-	verbose: false,
+	Verbosity: VerbosityInfo,
 }
 
-func (p *SLog) SetVerbosity(verbose bool) {
-	p.verbose = verbose
+func (p *SLog) SetVerbosity(verbosity int) {
+	p.Verbosity = verbosity
 }
 
 func (p *SLog) Error(s string) {
@@ -76,14 +82,28 @@ func (p *SLog) InfoF(format string, a ...interface{}) {
 
 func (p *SLog) Debug(s string) {
 	col := "\x1b[34m[DEBUG]\x1b[0m "
-	if p.verbose {
+	if p.Verbosity >= VerbosityDebug {
 		fmt.Println(col + s)
 	}
 }
 
 func (p *SLog) DebugF(format string, a ...interface{}) {
 	col := "\x1b[34m[DEBUG]\x1b[0m "
-	if p.verbose {
+	if p.Verbosity >= VerbosityDebug {
+		fmt.Printf(col+format, a...)
+	}
+}
+
+func (p *SLog) Trace(s string) {
+	col := "\x1b[34m[TRACE]\x1b[0m "
+	if p.Verbosity >= VerbosityTrace {
+		fmt.Println(col + s)
+	}
+}
+
+func (p *SLog) TraceF(format string, a ...interface{}) {
+	col := "\x1b[34m[TRACE]\x1b[0m "
+	if p.Verbosity >= VerbosityTrace {
 		fmt.Printf(col+format, a...)
 	}
 }

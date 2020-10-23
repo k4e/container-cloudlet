@@ -23,7 +23,9 @@ func main() {
 	for _, arg := range os.Args[1:] {
 		switch arg {
 		case "-v":
-			Logger.SetVerbosity(true)
+			Logger.SetVerbosity(VerbosityDebug)
+		case "-vv":
+			Logger.SetVerbosity(VerbosityTrace)
 		case "-i":
 			interactive = true
 		default:
