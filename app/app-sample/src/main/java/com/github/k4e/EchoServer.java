@@ -13,7 +13,7 @@ import java.util.Collections;
 import java.util.Enumeration;
 
 public class EchoServer {
-    private static final int BUF_SIZE = 1024 * 1024;
+    private static final int BUF_SIZE = 32 * 1024 * 1024;
 
     private final int port;
     private final int sleepMs;

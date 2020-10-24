@@ -5,8 +5,7 @@ import java.util.Arrays;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import com.github.k4e.exp.DeployTest;
-import com.github.k4e.exp.SpeedTest;
+import com.github.k4e.exp.PerformanceTest;
 import com.github.k4e.types.Request;
 
 public class App {
@@ -14,7 +13,7 @@ public class App {
     public static final UUID SESH_UUID = UUID.fromString("55C497AC-8AD5-4DA1-8673-6199443AE137");
 
     public static void main(String[] args) throws Exception {
-        System.out.println("Build 2020-10-22");
+        System.out.println("Build 2020-10-24");
         if (args.length < 1) {
             System.err.println("Method required: [deploy|remove|send|session|experiment]");
             System.exit(-1);
@@ -38,13 +37,14 @@ public class App {
             experiment(args);
             break;
         default:
-            throw new UnsupportedOperationException(meth);
+            System.err.println("Unsupported method: " + meth);
+            System.exit(-1);
         }
     }
 
     private static void deploy(String[] args) throws IOException {
         if (args.length < 3) {
-            System.err.printf("Required args: deploy %s <Host>\n", deployTypeDescription());
+            System.err.printf("Required args: %s %s <Host>\n", args[0], deployTypeDescription());
             System.exit(-1);
         }
         String type = args[1];
@@ -67,7 +67,7 @@ public class App {
 
     private static void remove(String[] args) throws IOException {
         if (args.length < 2) {
-            System.err.println("Required args: remove <Host>");
+            System.err.printf("Required args: %s <Host>\n", args[0]);
             System.exit(-1);
         }
         String host = args[1];
@@ -76,7 +76,7 @@ public class App {
 
     private static void send(String[] args) throws IOException {
         if (args.length < 3) {
-            System.err.println("Required args: send <Host> <Port> [message]");
+            System.err.printf("Required args: %s <Host> <Port> [Message]\n", args[0]);
             System.exit(-1);
         }
         String host = args[1];
@@ -93,148 +93,124 @@ public class App {
 
     private static void session(String[] args) throws IOException {
         if (args.length < 3) {
-            System.err.println("Required args: session <Host> <Port>");
+            System.err.printf("Required args: %s <Host> <Port>\n", args[0]);
             System.exit(-1);
         }
         String host = args[1];
         int port = Integer.parseInt(args[2]);
-        // String fwdHost = null;
-        // boolean resume = false;
-        // for (int i = 3; i < args.length; ++i) {
-        //     String arg = args[i];
-        //     if ("-f".equals(arg) || "--forward".equals(arg)) {
-        //         if (i + 1 < args.length) {
-        //             fwdHost = args[i+1];
-        //             ++i;
-        //         } else {
-        //             System.err.println("--forward requires hostIP");
-        //             System.exit(-1);
-        //         }
-        //     } else if ("-r".equals(arg) || "--resume".equals(arg)) {
-        //         resume = true;
-        //     } else {
-        //         System.err.println("Warning: ignored arg: " + arg);
-        //     }
-        // }
-        // String fwdHostIp = null;
-        // short fwdHostPort = 0;
-        // if (fwdHost != null) {
-        //     try {
-        //         String[] ipPort = fwdHost.split(":");
-        //         if (ipPort.length != 2) {
-        //             throw new IllegalArgumentException();
-        //         }
-        //         fwdHostIp = ipPort[0];
-        //         fwdHostPort = Short.parseShort(ipPort[1]);
-        //     } catch (IllegalArgumentException e) {
-        //         System.err.println("hostIp is expected as ipaddr:port but was %s" + fwdHost);
-        //         System.exit(-1);
-        //     }
-        // }
         SessionClient.of(host, port, SESH_UUID).exec();
     }
 
     public static void experiment(String[] args) throws Exception {
         if (args.length < 2) {
-            System.err.println("Experiment case required");
+            System.err.println("Which item of experiment?");
             System.exit(-1);
         }
-        String expCase = args[1];
-        switch (expCase) {
+        String item = args[1];
+        switch (item) {
         case "deploy":
             deployTest(args);
             break;
-        case "speed":
-            speedTest(args);
+        case "latency":
+        case "ltc":
+            latencyTest(args);
+            break;
+        case "throughput":
+        case "thru":
+            throughputTest(args);
             break;
         default:
-            throw new UnsupportedOperationException(expCase);
+            System.err.println("Unsupported expriment item: " + item);
+            System.exit(-1);
         }
     }
 
     public static void deployTest(String[] args) throws Exception {
         if (args.length < 4) {
-            System.err.printf(
-                "Required args: experiment deploy <Host> %s\n", deployTypeDescription());
+            System.err.printf("Required args: %s %s %s <Host>\n",
+                args[0], args[1], deployTypeDescription());
             System.exit(-1);
         }
-        String host = args[2];
-        String type = args[3];
+        String type = args[2];
+        String hostAddr = args[3];
         Request.Deploy.Type ctype = Request.Deploy.Type.valueOfIgnoreCase(type);
         if (ctype == null) {
-            System.err.printf("Unsupported deploy type: " + type);
+            System.err.println("Unsupported deploy type: " + type);
             System.exit(-1);
         }
         String srcAddr = null;
         if (ctype == Request.Deploy.Type.LM || ctype == Request.Deploy.Type.FWD) {
             if (args.length < 5) {
-                System.err.println("Src-addr is required");
+                System.err.println("Src addr is required");
                 System.exit(-1);
             }
             srcAddr = args[4];
         }
-        new DeployTest(SESH_UUID).exec(host, ctype, srcAddr);
+        new PerformanceTest(SESH_UUID).deployTest(hostAddr, ctype, srcAddr);
     }
 
-    public static void speedTest(String[] args) throws Exception {
+    public static void latencyTest(String[] args) throws Exception {
         if (args.length < 4) {
-            System.err.println("Required args: experiment speed <Host> <DataSize(KB)>");
+            System.err.printf("Required args: %s %s <Host> <DataSize(KB)>\n",
+                args[0], args[1]);
             System.exit(-1);
         }
         String hostAddr = args[2];
-        int dataSize = Integer.parseInt(args[3]);
-        int count = SpeedTest.DEFAULT_COUNT;
-        Request.Deploy.Type ctype = null;
-        String srcAddr = null;
-        boolean noWait = false;
+        int dataSizeKB = Integer.parseInt(args[3]);
+        int count = PerformanceTest.DEFAULT_COUNT;
         boolean fullCheck = false;
         for (int i = 1; i < args.length; ++i) {
-            if ("-n".equals(args[i])) {
+            if ("-c".equals(args[i])) {
                 if (i + 1 < args.length) {
                     count = Integer.parseInt(args[i + 1]);
-                } else {
-                    System.err.println("Count value required");
-                    System.exit(-1);
-                }
-            } else if ("-W".equals(args[i])) {
-                noWait = true;
-            } else if ("-f".equals(args[i])) {
-                fullCheck = true;
-            } else if ("-c".equals(args[i])) {
-                if (i + 1 < args.length) {
-                    String c = args[i+1];
-                    count = Integer.parseInt(c);
-                    ++i;
                 } else {
                     System.err.println("-c requires count");
                     System.exit(-1);
                 }
-            } else if ("--deploy".equals(args[i])) {
-                if (i + 1 < args.length) {
-                    String type = args[i+1];
-                    ctype = Request.Deploy.Type.valueOfIgnoreCase(type);
-                    ++i;
-                } else {
-                    System.err.println("--deploy requires " + deployTypeDescription());
-                    System.exit(-1);
-                }
-            } else if ("--src-addr".equals(args[i])) {
-                if (i + 1 < args.length) {
-                    srcAddr = args[i+1];
-                    ++i;
-                } else {
-                    System.err.println("--src-addr requires source host address");
-                    System.exit(-1);
-                }
+            } else if ("-f".equals(args[i])) {
+                fullCheck = true;
+            } else if (args[i].startsWith("-")) {
+                System.err.println("Ignored option: " + args[i]);
             }
         }
+        new PerformanceTest(SESH_UUID).latencyTest(hostAddr, dataSizeKB, count, fullCheck);
+    }
+
+    public static void throughputTest(String[] args) throws Exception {
+        if (args.length < 4) {
+            System.err.printf("Required args: %s %s %s <Host>\n",
+                args[0], args[1], deployTypeDescription());
+            System.exit(-1);
+        }
+        String type = args[2];
+        String hostAddr = args[3];
+        Request.Deploy.Type ctype = Request.Deploy.Type.valueOfIgnoreCase(type);
+        if (ctype == null) {
+            System.err.println("Unsupported deploy type: " + type);
+            System.exit(-1);
+        }
+        String srcAddr = null;
         if (ctype == Request.Deploy.Type.LM || ctype == Request.Deploy.Type.FWD) {
-            if (srcAddr == null) {
-                System.err.println("--src-addr is required");
+            if (args.length < 5) {
+                System.err.println("Src addr is required");
                 System.exit(-1);
             }
+            srcAddr = args[4];
         }
-        new SpeedTest(SESH_UUID).exec(hostAddr, ctype, dataSize, count, srcAddr, noWait, fullCheck);
+        int duration = PerformanceTest.DEFAULT_DURATION_SEC;
+        for (int i = 1; i < args.length; ++i) {
+            if ("-d".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    duration = Integer.parseInt(args[i + 1]);
+                } else {
+                    System.err.println("-d requires duration(sec.)");
+                    System.exit(-1);
+                }
+            } else if (args[i].startsWith("-")) {
+                System.err.println("Ignored option: " + args[i]);
+            }
+        }
+        new PerformanceTest(SESH_UUID).throughputTest(hostAddr, ctype, srcAddr, duration);
     }
 
     private static String deployTypeDescription() {

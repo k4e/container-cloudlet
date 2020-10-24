@@ -107,3 +107,28 @@ func ReadPodFile(
 	v := stdout.String()
 	return v, nil
 }
+
+func WritePodFile(
+	clientset kubernetes.Interface,
+	config *rest.Config,
+	namespace string,
+	podName string,
+	containerName string,
+	stderr io.Writer,
+	path string,
+	content string,
+	permission string,
+) error {
+	stdin := &bytes.Buffer{}
+	stdin.WriteString(content)
+	chmod := ""
+	if permission != "" {
+		chmod = fmt.Sprintf("&& chmod %s %s", permission, path)
+	}
+	cmd := []string{"/bin/sh", "-c", fmt.Sprintf("cat > %s %s", path, chmod)}
+	if err := ExecutePod(clientset, config, namespace, podName, containerName,
+		stdin, nil, stderr, cmd...); err != nil {
+		return err
+	}
+	return nil
+}

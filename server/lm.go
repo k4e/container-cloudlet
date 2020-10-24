@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,12 +17,14 @@ import (
 )
 
 const (
-	LM_HostMsgPort          = 19998
-	LM_HostDataPort         = 19999
+	LM_HostMsgPort          = 19999
+	LM_HostDataPort         = 19998
+	LM_HostResumeSigPort    = 19997
 	LM_PodRsyncPort         = 873
 	LM_DumpImagesDir        = "/tmp/cloudlet-live-migration/images"
 	LM_RsyncModuleName      = "tmp"
 	LM_RsyncModuleDirectory = "/tmp"
+	LM_PostResumeScriptPath = "/tmp/cloudlet-live-migration.post-resume.sh"
 	MainPidFilePath         = "/MAIN_PID"
 )
 
@@ -52,6 +55,39 @@ type LM_Restore struct {
 func (p *LM_Restore) Exec() error {
 	var startTime time.Time
 	var endTime time.Time
+	Logger.Debug("[Restore] Listen to resume signal")
+	lnResumeAddr := fmt.Sprintf(":%d", LM_HostResumeSigPort)
+	lnResume, err := net.Listen("tcp", lnResumeAddr)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer lnResume.Close()
+	resumeChan := make(chan struct{}, 1)
+	go func() {
+		defer close(resumeChan)
+		conn, err := lnResume.Accept()
+		if err != nil {
+			if IsClosedError(err) {
+				Logger.Warn("[Restore] Resume signal listener close")
+			} else {
+				Logger.ErrorE(err)
+			}
+			return
+		}
+		Logger.Debug("[Restore] Resume signal accept")
+		defer conn.Close()
+		conn.SetDeadline(time.Now().Add(1 * time.Second))
+		buf := make([]byte, 1)
+		_, _ = conn.Read(buf)
+	}()
+	Logger.Debug("[Restore] Prepare post-resume script")
+	postResumeScript := fmt.Sprintf("#!/bin/sh\n"+
+		"if test \"$CRTOOLS_SCRIPT_ACTION\" = \"post-restore\"; then echo Send resume signal; nc -vz %s %d; fi\n",
+		p.ThisAddr, LM_HostResumeSigPort)
+	if err := WritePodFile(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName,
+		os.Stderr, LM_PostResumeScriptPath, postResumeScript, "755"); err != nil {
+		return err
+	}
 	Logger.Debug("[Restore] Exec rsync --daemon")
 	if err := ExecutePod(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName,
 		nil, os.Stdout, os.Stderr, "/bin/sh", "-c", "rsync --daemon"); err != nil {
@@ -82,24 +118,43 @@ func (p *LM_Restore) Exec() error {
 		return err
 	}
 	endTime = time.Now()
-	Logger.DebugF("[Restore] Pre-dump time (ns): %d\n", endTime.Sub(startTime).Nanoseconds())
+	Logger.DebugF("[Restore] Pre-dump time (ms): %d\n", endTime.Sub(startTime).Milliseconds())
 	Logger.Debug("[Restore] Send final dump request")
 	startTime = time.Now()
+	startDowntime := time.Now()
 	if err := p.sendDumpServiceRequest(conn, LM_MsgReqDump); err != nil {
 		return err
 	}
 	endTime = time.Now()
-	Logger.DebugF("[Restore] Final dump time (ns): %d\n", endTime.Sub(startTime).Nanoseconds())
+	Logger.DebugF("[Restore] Final dump time (ms): %d\n", endTime.Sub(startTime).Milliseconds())
 	Logger.Debug("[Restore] Exec unshare criu restore")
-	startTime = time.Now()
-	if err := ExecutePod(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName,
-		nil, os.Stdout, os.Stderr, "/bin/sh", "-c", fmt.Sprintf(
-			"unshare -p -m --fork --mount-proc criu restore --images-dir %s/final --tcp-established --shell-job &",
-			LM_DumpImagesDir)); err != nil {
-		return err
+	timeoutChan := make(chan struct{}, 1)
+	go func() {
+		defer close(timeoutChan)
+		time.Sleep(5 * time.Second)
+	}()
+	go func() {
+		actionScriptOpt := fmt.Sprintf("--action-script %s", LM_PostResumeScriptPath)
+		if err := ExecutePod(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName,
+			nil, os.Stdout, os.Stderr, "/bin/sh", "-c", fmt.Sprintf(
+				"unshare -p -m --fork --mount-proc"+
+					" criu restore --images-dir %s/final --tcp-established --shell-job %s &",
+				LM_DumpImagesDir, actionScriptOpt)); err != nil {
+			Logger.ErrorE(err)
+		}
+	}()
+	for waitForResume := true; waitForResume; {
+		select {
+		case <-resumeChan:
+			Logger.DebugF("[Restore] Estimated downtime (ms): %d\n", time.Now().Sub(startDowntime).Milliseconds())
+			waitForResume = false
+		case <-timeoutChan:
+			Logger.Warn("[Restore] Waiting for resume timeout")
+			waitForResume = false
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
-	endTime = time.Now()
-	Logger.DebugF("[Restore] Restore time (ns): %d\n", endTime.Sub(startTime).Nanoseconds())
 	return nil
 }
 
@@ -138,25 +193,18 @@ func (p *LM_Restore) sendDumpStartRequest() (*Response, error) {
 
 func (p *LM_Restore) sendDumpServiceRequest(conn net.Conn, req byte) error {
 	reqbuf := []byte{req}
+	if _, err := conn.Write(reqbuf); err != nil {
+		return errors.WithStack(err)
+	}
 	respbuf := make([]byte, 1)
-	var err error
-	for {
-		if n, err := conn.Write(reqbuf); n > 0 || err != nil {
-			break
+	if n, err := conn.Read(respbuf); !(n > 0) {
+		if err != nil {
+			return errors.WithStack(err)
+		} else {
+			return errors.New("Read 0 bytes")
 		}
-	}
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	for {
-		if n, err := conn.Read(respbuf); n > 0 || err != nil {
-			break
-		}
-	}
-	if err != nil {
-		return errors.WithStack(err)
 	} else if respbuf[0] != LM_MsgRespOk {
-		return errors.New("Dump service respond an error")
+		return stderrors.New("Dump service respond an error")
 	}
 	return nil
 }
@@ -215,24 +263,19 @@ func (p *LM_DumpService) Start() (reterr error) {
 		}()
 		conn, err := ln.Accept()
 		if err != nil {
-			Logger.ErrorE(errors.WithStack(err))
+			Logger.ErrorE(err)
 			return
 		}
 		defer conn.Close()
 		reqbuf := make([]byte, 1)
 		for itercnt := 1; true; itercnt++ {
-			var n int
-			var err error
-			for {
-				if n, err = conn.Read(reqbuf); n > 0 || err != nil {
-					break
-				}
-			}
-			if err != nil {
+			if n, err := conn.Read(reqbuf); !(n > 0) {
 				if err == io.EOF {
 					Logger.Debug("[Dump][svc] Received EOF")
+				} else if err != nil {
+					Logger.ErrorE(err)
 				} else {
-					Logger.ErrorE(errors.WithStack(err))
+					Logger.ErrorE(errors.New("Read 0 bytes"))
 				}
 				return
 			}
@@ -253,7 +296,7 @@ func (p *LM_DumpService) Start() (reterr error) {
 				Logger.Debug("[Dump][svc] Exec mkdir && criu pre-dump && rsync")
 				if err := ExecutePod(p.Clientset, p.RestConfig, p.Namespace, p.PodName, p.ContainerName,
 					nil, os.Stdout, os.Stderr, "/bin/sh", "-c", argb.String()); err != nil {
-					Logger.ErrorE(errors.WithStack(err))
+					Logger.ErrorE(err)
 					resp = LM_MsgRespError
 				} else {
 					resp = LM_MsgRespOk
@@ -273,7 +316,7 @@ func (p *LM_DumpService) Start() (reterr error) {
 				Logger.Debug("[Dump][svc] Exec mkdir && criu dump && rsync")
 				if err := ExecutePod(p.Clientset, p.RestConfig, p.Namespace, p.PodName, p.ContainerName,
 					nil, os.Stdout, os.Stderr, "/bin/sh", "-c", argb.String()); err != nil {
-					Logger.ErrorE(errors.WithStack(err))
+					Logger.ErrorE(err)
 					resp = LM_MsgRespError
 				} else {
 					resp = LM_MsgRespOk
@@ -283,13 +326,8 @@ func (p *LM_DumpService) Start() (reterr error) {
 				resp = LM_MsgRespError
 			}
 			respbuf := []byte{resp}
-			for {
-				if n, err = conn.Write(respbuf); n > 0 || err != nil {
-					break
-				}
-			}
-			if err != nil {
-				Logger.ErrorE(errors.WithStack(err))
+			if _, err := conn.Write(respbuf); err != nil {
+				Logger.ErrorE(err)
 				return
 			}
 		}
