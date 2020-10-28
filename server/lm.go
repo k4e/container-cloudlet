@@ -82,7 +82,7 @@ func (p *LM_Restore) Exec() error {
 	}()
 	Logger.Debug("[Restore] Prepare post-resume script")
 	postResumeScript := fmt.Sprintf("#!/bin/sh\n"+
-		"if test \"$CRTOOLS_SCRIPT_ACTION\" = \"post-restore\"; then echo Send resume signal; nc -vz %s %d; fi\n",
+		"if test \"$CRTOOLS_SCRIPT_ACTION\" = \"post-resume\"; then echo Send resume signal; nc -vz %s %d; fi\n",
 		p.ThisAddr, LM_HostResumeSigPort)
 	if err := WritePodFile(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName,
 		os.Stderr, LM_PostResumeScriptPath, postResumeScript, "755"); err != nil {

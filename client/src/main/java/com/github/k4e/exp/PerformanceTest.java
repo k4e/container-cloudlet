@@ -21,7 +21,7 @@ import com.google.gson.Gson;
 public class PerformanceTest {
 
     public static final int DEFAULT_COUNT = 10;
-    public static final int DEFAULT_DURATION_SEC = 15;
+    public static final int DEFAULT_DURATION_SEC = 30;
     public static final long DEFAULT_TIME_X_INTERVAL = 500L * 1000L * 1000L;
     private final Random random = new Random(101L);
     private final UUID seshId;
@@ -94,7 +94,7 @@ public class PerformanceTest {
             }
         }
         long endTime = System.nanoTime();
-        System.out.println("CreationTime (ms): " + (endTime - startTime) / 1000000);
+        System.out.println("Deploy time (ms): " + (endTime - startTime) / 1000000);
         System.out.println("--- Deploy test finish ---");
     }
 
@@ -186,9 +186,9 @@ public class PerformanceTest {
             int apiReadCount = reader.read(cbuf);
             System.out.printf("Recv: %s\n", apiReadCount > 0 ? new String(cbuf, 0, apiReadCount) : "(none)");
         }
-        System.out.println("CreationTime (ms): " + (System.nanoTime() - firstTime) / 1000000);
+        System.out.println("Deploy time (ms): " + (System.nanoTime() - firstTime) / 1000000);
         System.out.println("Send test data to the app");
-        System.out.println("Time(ms)\tThruput(MB/s)");
+        System.out.println("Time(s)\tThruput(MiB/s)");
         while (getCurrentTimeX.get() < duration * 1000000000L) {
             long accumBytes = 0L;
             try (Socket sockApp = new Socket(hostAddr, CloudletClient.DEFAULT_APP_EXT_PORT)) {
@@ -201,7 +201,6 @@ public class PerformanceTest {
                     out.write(data);
                     out.flush();
                     int wroteSz = data.length;
-                    accumBytes += wroteSz;
                     int readSz = 0;
                     while (readSz < wroteSz) {
                         int n = in.read(buf, readSz, buf.length - readSz);
@@ -217,16 +216,16 @@ public class PerformanceTest {
                     }
                     long currentTimeX = getCurrentTimeX.get();
                     while (nextTimeX <= currentTimeX) {
-                        long timeXMs = (cntTimeSection * DEFAULT_TIME_X_INTERVAL) / 1000000;
-                        System.out.printf("%d\t%d\n", timeXMs, 0);
+                        double timeXS = (cntTimeSection * DEFAULT_TIME_X_INTERVAL) / 1000000000.;
+                        System.out.printf("%f\t%f\n", timeXS, 0.);
                         nextTimeX += DEFAULT_TIME_X_INTERVAL;
                         ++cntTimeSection;
                     }
                     if (nextTimeX <= currentTimeX + DEFAULT_TIME_X_INTERVAL) {
-                        long timeXMs = (cntTimeSection * DEFAULT_TIME_X_INTERVAL) / 1000000;
+                        double timeXS = (cntTimeSection * DEFAULT_TIME_X_INTERVAL) / 1000000000.;
                         double dataSizeMB = ((double)(accumBytes)) / (1024 * 1024);
                         double thruput = (dataSizeMB / (DEFAULT_TIME_X_INTERVAL / 1000000000.));
-                        System.out.printf("%d\t%f\n", timeXMs, thruput);
+                        System.out.printf("%f\t%f\n", timeXS, thruput);
                         nextTimeX += DEFAULT_TIME_X_INTERVAL;
                         ++cntTimeSection;
                         accumBytes = 0L;
