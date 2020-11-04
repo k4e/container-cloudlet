@@ -3,31 +3,24 @@ package com.github.k4e;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.net.UnknownHostException;
-import java.util.UUID;
-
-import com.github.k4e.types.ProtocolHeader;
 
 public class SessionClient {
 
-    public static SessionClient of(String host, int port, UUID sessionId)
+    public static SessionClient of(String host, int port)
     throws UnknownHostException {
-        ProtocolHeader header = ProtocolHeader.create(sessionId);
-        return new SessionClient(host, port, header);
+        return new SessionClient(host, port);
     }
 
     private final String host;
     private final int port;
-    private final ProtocolHeader header;
     private final Object muxPrint;
 
-    private SessionClient(String host, int port, ProtocolHeader header) {
+    private SessionClient(String host, int port) {
         this.host = host;
         this.port = port;
-        this.header = header;
         this.muxPrint = new Object();
     }
 
@@ -69,7 +62,6 @@ public class SessionClient {
         });
         BufferedReader stdin = new BufferedReader(new InputStreamReader(System.in));
         PrintWriter writer = new PrintWriter(sock.getOutputStream());
-        sendHeader(sock);
         receiver.start();
         System.out.println("Session start. Write text to send or /q to quit");
         while (receiver.isAlive()) {
@@ -83,14 +75,6 @@ public class SessionClient {
         }
         receiver.interrupt();
         System.out.println("Session end");
-    }
-
-    private void sendHeader(Socket sock) throws IOException {
-        System.out.println("Header: " + header.toString());
-        OutputStream out = sock.getOutputStream();
-        byte[] b = header.getBytes();
-        out.write(b);
-        out.flush();
     }
 
     private void syncPrintln(String s) {

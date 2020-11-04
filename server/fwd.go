@@ -2,19 +2,19 @@ package main
 
 /*
   TODO:
-  - Session.Start() のロック内での Dial() や Close() は時間がかかりすぎるので回避する
-  - hostConn の保持によるコネクションの維持を実現する
+  - Forwarder.Start() のロック内での Dial() や Close() は時間がかかりすぎるので回避する
+  - serverConn の保持によるコネクションの維持を実現する
 */
 
 import (
-	"errors"
+	stderrors "errors"
 	"io"
 	"net"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/pkg/errors"
 )
 
 const KeepSec = 60.
@@ -30,176 +30,109 @@ func IsDeadlineExceeded(err error) bool {
 	if !nerr.Timeout() {
 		return false
 	}
-	if !errors.Is(err, os.ErrDeadlineExceeded) {
+	if !stderrors.Is(err, os.ErrDeadlineExceeded) {
 		return false
 	}
 	return true
 }
 
-type SessionPool struct {
-	seshs sync.Map
+type Forwarder struct {
+	keep       bool
+	serverConn *ConnClosable
+	muxStream  sync.Mutex
+	upAlive    bool
+	upBuf      []byte
+	upBufLB    int
+	upBufUB    int
+	downAlive  bool
+	downBuf    []byte
+	downBufLB  int
+	downBufUB  int
 }
 
-type SessionKey struct {
-	sessionId uuid.UUID
-	hostIP    string
-	hostPort  int
-}
-
-func (p *SessionPool) Accept(
+func AcceptForwarder(
 	ln *net.TCPListener,
 	network string,
-	hostAddr *net.TCPAddr,
+	serverAddr *net.TCPAddr,
 	isExtHost bool,
 ) error {
+	if serverAddr == nil {
+		return errors.New("serverAddr is empty")
+	}
 	clientConn, err := ln.AcceptTCP()
 	if err != nil {
-		if !IsClosedError(err) {
-			return err
-		}
-		return nil
+		return err
 	}
 	Logger.Debug("Accept: " + clientConn.RemoteAddr().String())
-	head, err := ReadProtocolHeader(clientConn)
-	if err != nil {
-		return err
-	}
-	Logger.Debug("Header: " + head.String())
-	// var hostAddr* net.TCPAddr
-	// isHostFwd := false
-	// fwdIp := head.DstIP
-	// fwdPort := head.DstPort
-	// if net.IPv4(0, 0, 0, 0).Equal(fwdIp) {
-	// 	if appAddr == nil {
-	// 		Logger.Warn("Fatal: requires dstIP:dstPort on a header because the app isn't created")
-	// 	}
-	// 	hostAddr = appAddr
-	// } else {
-	// 	if fwdPort == 0 {
-	// 		return errors.New(fmt.Sprintf("missing port in address (HostAddr=%s)", hostAddr))
-	// 	}
-	// 	hostAddrStr := fmt.Sprintf("%s:%d", fwdIp.String(), fwdPort)
-	// 	var err error
-	// 	hostAddr, err = net.ResolveTCPAddr(network, hostAddrStr)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	isHostFwd = true
-	// }
-	if hostAddr == nil {
-		return errors.New("HostAddr is empty")
-	}
-	if err != nil {
-		return err
-	}
-	key := SessionKey{head.SessionId, hostAddr.IP.String(), hostAddr.Port}
-	sesh, ok := p.seshs.LoadOrStore(key, NewSession(true))
-	if !ok {
-		Logger.Debug("New session")
-	} else {
-		Logger.Debug("Use existing session")
-	}
-	var headBytes []byte
-	if isExtHost {
-		nextHead := ProtocolHeader{
-			SessionId: head.SessionId,
-			// DstIP:     net.IPv4(0, 0, 0, 0),
-			// DstPort:   0,
-			// Flag:      head.Flag,
-		}
-		headBytes = nextHead.Bytes()
-	}
-	go sesh.(*Session).Start(NewConnection(clientConn), network, hostAddr, false, headBytes)
+	fwd := newForwarder()
+	go fwd.start(NewConnClosable(clientConn), network, serverAddr, false)
 	return nil
 }
 
-type Session struct {
-	keep      bool
-	mux       sync.Mutex
-	hostConn  *Connection
-	muxStream sync.Mutex
-	upAlive   bool
-	upBuf     []byte
-	upBufLB   int
-	upBufUB   int
-	downAlive bool
-	downBuf   []byte
-	downBufLB int
-	downBufUB int
-}
-
-func NewSession(keep bool) *Session {
-	p := &Session{keep: true}
+func newForwarder() *Forwarder {
+	p := &Forwarder{}
 	p.upBuf = make([]byte, BufferSize)
 	p.downBuf = make([]byte, BufferSize)
 	return p
 }
 
-func (p *Session) Start(
-	clientConn *Connection,
+func (p *Forwarder) start(
+	clientConn *ConnClosable,
 	network string,
-	hostAddr *net.TCPAddr,
+	serverAddr *net.TCPAddr,
 	resume bool,
-	headBytes []byte,
 ) {
 	p.setStreamsAlive(false)
-	defer func() {
-		p.mux.Unlock()
-	}()
-	p.mux.Lock()
-	wg := &sync.WaitGroup{}
-	var hostConn *Connection
+	var serverConn *ConnClosable
 	if true {
-		conn, err := net.DialTCP(network, nil, hostAddr)
+		conn, err := net.DialTCP(network, nil, serverAddr)
 		if err != nil {
 			Logger.ErrorE(err)
-			Logger.Debug("Client close")
+			Logger.Debug("Client conn close")
 			if err := clientConn.Close(); err != nil {
 				Logger.Warn("Warning: clientConn.Close: " + err.Error())
 			}
 			return
 		}
-		Logger.Debug("Host open")
-		hostConn = NewConnection(conn)
-		if len(headBytes) > 0 {
-			hostConn.Write(headBytes)
-		}
+		Logger.Debug("Server conn open")
+		serverConn = NewConnClosable(conn)
 	}
 	p.setStreamsAlive(true)
+	wg := &sync.WaitGroup{}
 	wg.Add(2)
-	go p.upstream(clientConn, hostConn, wg)
-	go p.downstream(clientConn, hostConn, wg)
+	go p.upstream(clientConn, serverConn, wg)
+	go p.downstream(clientConn, serverConn, wg)
 	wg.Wait()
 	clientConn.Close()
-	hostConn.Close()
+	serverConn.Close()
 }
 
-func (p *Session) getStreamsAlive() bool {
+func (p *Forwarder) getStreamsAlive() bool {
 	defer p.muxStream.Unlock()
 	p.muxStream.Lock()
 	return p.upAlive && p.downAlive
 }
 
-func (p *Session) setStreamsAlive(b bool) {
+func (p *Forwarder) setStreamsAlive(b bool) {
 	defer p.muxStream.Unlock()
 	p.muxStream.Lock()
 	p.upAlive = b
 	p.downAlive = b
 }
 
-func (p *Session) setUpstreamAlive(b bool) {
+func (p *Forwarder) setUpstreamAlive(b bool) {
 	defer p.muxStream.Unlock()
 	p.muxStream.Lock()
 	p.upAlive = b
 }
 
-func (p *Session) setDownstreamAlive(b bool) {
+func (p *Forwarder) setDownstreamAlive(b bool) {
 	defer p.muxStream.Unlock()
 	p.muxStream.Lock()
 	p.downAlive = b
 }
 
-func (p *Session) upstream(clientConn, hostConn *Connection, wg *sync.WaitGroup) {
+func (p *Forwarder) upstream(clientConn, serverConn *ConnClosable, wg *sync.WaitGroup) {
 	defer func() {
 		Logger.Debug("upstream: finish")
 		p.setUpstreamAlive(false)
@@ -219,13 +152,13 @@ func (p *Session) upstream(clientConn, hostConn *Connection, wg *sync.WaitGroup)
 		}
 		if p.upBufUB > 0 {
 			for p.getStreamsAlive() {
-				if hostConn.IsClosed() {
+				if serverConn.IsClosed() {
 					return
 				}
-				if err := hostConn.SetWriteDeadline(time.Now().Add(TimeoutDuration)); err != nil {
-					Logger.Warn("Warning: hostConn.SetWriteDeadline: " + err.Error())
+				if err := serverConn.SetWriteDeadline(time.Now().Add(TimeoutDuration)); err != nil {
+					Logger.Warn("Warning: serverConn.SetWriteDeadline: " + err.Error())
 				}
-				m, herr := hostConn.Write(p.upBuf[p.upBufLB:p.upBufUB])
+				m, herr := serverConn.Write(p.upBuf[p.upBufLB:p.upBufUB])
 				Logger.TraceF("upstream: Wrote: %s", p.upBuf[p.upBufLB:p.upBufUB])
 				p.upBufLB += m
 				if herr != nil {
@@ -265,7 +198,7 @@ func (p *Session) upstream(clientConn, hostConn *Connection, wg *sync.WaitGroup)
 	}
 }
 
-func (p *Session) downstream(clientConn, hostConn *Connection, wg *sync.WaitGroup) {
+func (p *Forwarder) downstream(clientConn, serverConn *ConnClosable, wg *sync.WaitGroup) {
 	defer func() {
 		Logger.Debug("downstream: finish")
 		p.setDownstreamAlive(false)
@@ -277,13 +210,13 @@ func (p *Session) downstream(clientConn, hostConn *Connection, wg *sync.WaitGrou
 	for p.getStreamsAlive() {
 		var herr error
 		if p.downBufUB == 0 {
-			if hostConn.IsClosed() {
+			if serverConn.IsClosed() {
 				return
 			}
-			if err := hostConn.SetReadDeadline(time.Now().Add(TimeoutDuration)); err != nil {
-				Logger.Warn("Warning: hostConn.SetReadDeadline: " + err.Error())
+			if err := serverConn.SetReadDeadline(time.Now().Add(TimeoutDuration)); err != nil {
+				Logger.Warn("Warning: serverConn.SetReadDeadline: " + err.Error())
 			}
-			p.downBufUB, herr = hostConn.Read(p.downBuf)
+			p.downBufUB, herr = serverConn.Read(p.downBuf)
 			p.downBufLB = 0
 		}
 		if p.downBufUB > 0 {
@@ -329,7 +262,7 @@ func (p *Session) downstream(clientConn, hostConn *Connection, wg *sync.WaitGrou
 				continue
 			}
 			if herr == io.EOF {
-				Logger.Debug("downstream: host reached end")
+				Logger.Debug("downstream: server reached end")
 			} else {
 				Logger.ErrorE(herr)
 			}
@@ -340,25 +273,25 @@ func (p *Session) downstream(clientConn, hostConn *Connection, wg *sync.WaitGrou
 
 type net_TCPConn = net.TCPConn
 
-type Connection struct {
+type ConnClosable struct {
 	*net_TCPConn
 	cmux   sync.Mutex
 	closed bool
 }
 
-func NewConnection(tcpConn *net.TCPConn) *Connection {
-	return &Connection{
+func NewConnClosable(tcpConn *net.TCPConn) *ConnClosable {
+	return &ConnClosable{
 		net_TCPConn: tcpConn,
 	}
 }
 
-func (p *Connection) IsClosed() bool {
+func (p *ConnClosable) IsClosed() bool {
 	defer p.cmux.Unlock()
 	p.cmux.Lock()
 	return p.closed
 }
 
-func (p *Connection) Close() error {
+func (p *ConnClosable) Close() error {
 	defer p.cmux.Unlock()
 	p.cmux.Lock()
 	if p.closed {

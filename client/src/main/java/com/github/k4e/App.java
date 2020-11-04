@@ -2,7 +2,6 @@ package com.github.k4e;
 
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 import com.github.k4e.exp.PerformanceTest;
@@ -10,10 +9,10 @@ import com.github.k4e.types.Request;
 
 public class App {
 
-    public static final UUID SESH_UUID = UUID.fromString("55C497AC-8AD5-4DA1-8673-6199443AE137");
+    // public static final UUID SESH_UUID = UUID.fromString("55C497AC-8AD5-4DA1-8673-6199443AE137");
 
     public static void main(String[] args) throws Exception {
-        System.out.println("Build 2020-10-24");
+        System.out.println("Build 2020-11-04");
         if (args.length < 1) {
             System.err.println("Method required: [deploy|remove|send|session|experiment]");
             System.exit(-1);
@@ -98,7 +97,7 @@ public class App {
         }
         String host = args[1];
         int port = Integer.parseInt(args[2]);
-        SessionClient.of(host, port, SESH_UUID).exec();
+        SessionClient.of(host, port).exec();
     }
 
     public static void experiment(String[] args) throws Exception {
@@ -146,7 +145,7 @@ public class App {
             }
             srcAddr = args[4];
         }
-        new PerformanceTest(SESH_UUID).deployTest(hostAddr, ctype, srcAddr);
+        new PerformanceTest().deployTest(hostAddr, ctype, srcAddr);
     }
 
     public static void latencyTest(String[] args) throws Exception {
@@ -173,7 +172,7 @@ public class App {
                 System.err.println("Ignored option: " + args[i]);
             }
         }
-        new PerformanceTest(SESH_UUID).latencyTest(hostAddr, dataSizeKB, count, fullCheck);
+        new PerformanceTest().latencyTest(hostAddr, dataSizeKB, count, fullCheck);
     }
 
     public static void throughputTest(String[] args) throws Exception {
@@ -210,7 +209,7 @@ public class App {
                 System.err.println("Ignored option: " + args[i]);
             }
         }
-        new PerformanceTest(SESH_UUID).throughputTest(hostAddr, ctype, srcAddr, duration);
+        new PerformanceTest().throughputTest(hostAddr, ctype, srcAddr, duration);
     }
 
     private static String deployTypeDescription() {

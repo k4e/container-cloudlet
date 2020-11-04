@@ -1,70 +1,64 @@
 package main
 
 import (
-	"errors"
 	"net"
-	"sync"
+
+	"github.com/pkg/errors"
 )
 
-type ForwardingService struct {
-	muxClose   sync.Mutex
-	closed     bool
+type ForwarderService struct {
 	network    string
 	clientAddr *net.TCPAddr
-	hostAddr   *net.TCPAddr
+	serverAddr *net.TCPAddr
 	isExtHost  bool
-	ln         *net.TCPListener
-	sp         SessionPool
+	closeChan  chan struct{}
 }
 
-func StartForwardingService(
+func StartForwarderService(
 	network string,
 	clientAddr *net.TCPAddr,
-	hostAddr *net.TCPAddr,
+	serverAddr *net.TCPAddr,
 	isExtHost bool,
-) (*ForwardingService, error) {
-	p := &ForwardingService{
-		closed:     false,
+) (*ForwarderService, error) {
+	closeChan := make(chan struct{})
+	p := &ForwarderService{
 		network:    network,
 		clientAddr: clientAddr,
-		hostAddr:   hostAddr,
+		serverAddr: serverAddr,
 		isExtHost:  isExtHost,
-		ln:         nil,
+		closeChan:  closeChan,
 	}
 	ln, err := net.ListenTCP(network, clientAddr)
 	if err != nil {
 		return nil, err
 	}
-	p.ln = ln
-	go p.routine()
+	go func() {
+		<-p.closeChan
+		if err := ln.Close(); err != nil {
+			Logger.ErrorE(errors.WithStack(err))
+		}
+	}()
+	go p.listener(ln)
 	return p, err
 }
 
-func (p *ForwardingService) Close() error {
-	if p.ln == nil {
-		return errors.New("Socket not listening")
-	}
-	p.muxClose.Lock()
-	err := p.ln.Close()
-	p.closed = true
-	p.muxClose.Unlock()
-	return err
+func (p *ForwarderService) Close() error {
+	close(p.closeChan)
+	return nil
 }
 
-func (p *ForwardingService) routine() {
-	Logger.InfoF("Forwarding open: client=%s <--> %s\n", p.clientAddr.String(), p.hostAddr.String())
+func (p *ForwarderService) listener(ln *net.TCPListener) {
+	Logger.InfoF("Forwarding open: %s <--> %s\n", p.clientAddr.String(), p.serverAddr.String())
 	defer func() {
-		Logger.InfoF("Forwarding closed: client=%s <--> %s\n", p.clientAddr.String(), p.hostAddr.String())
+		Logger.InfoF("Forwarding closed: %s <--> %s\n", p.clientAddr.String(), p.serverAddr.String())
 	}()
 	for {
-		brk := false
-		p.muxClose.Lock()
-		brk = p.closed
-		p.muxClose.Unlock()
-		if brk {
-			break
+		select {
+		case <-p.closeChan:
+			return
+		default:
 		}
-		if err := p.sp.Accept(p.ln, p.network, p.hostAddr, p.isExtHost); err != nil {
+		if err := AcceptForwarder(ln, p.network, p.serverAddr, p.isExtHost); err != nil {
 			Logger.ErrorE(err)
 		}
 	}

@@ -67,7 +67,7 @@ func (p *APICore) DeployNew(req *Request) {
 	} else if clusterIP != "" {
 		clientAddr, appAddr, err := p.getForwardAddrs(portExt, clusterIP, portIn)
 		if err == nil {
-			if f, err := StartForwardingService("tcp", clientAddr, appAddr, false); err == nil {
+			if f, err := StartForwarderService("tcp", clientAddr, appAddr, false); err == nil {
 				p.fwdsvcs.Store(name, f)
 			} else {
 				Logger.ErrorE(err)
@@ -95,7 +95,7 @@ func (p *APICore) DeployFwd(req *Request) {
 	} else {
 		clientAddr, remoteAddr, err := p.getForwardAddrs(portExt, srcAddr, portIn)
 		if err == nil {
-			if f, err := StartForwardingService("tcp", clientAddr, remoteAddr, true); err == nil {
+			if f, err := StartForwarderService("tcp", clientAddr, remoteAddr, true); err == nil {
 				p.fwdsvcs.Store(name, f)
 			} else {
 				Logger.ErrorE(err)
@@ -132,7 +132,7 @@ func (p *APICore) DeployLM(req *Request) {
 	} else if clusterIP != "" {
 		clientAddr, appAddr, err := p.getForwardAddrs(portExt, clusterIP, portIn)
 		if err == nil {
-			if f, err := StartForwardingService("tcp", clientAddr, appAddr, false); err == nil {
+			if f, err := StartForwarderService("tcp", clientAddr, appAddr, false); err == nil {
 				p.fwdsvcs.Store(name, f)
 			} else {
 				Logger.ErrorE(err)
@@ -206,7 +206,7 @@ func (p *APICore) Remove(req *Request) {
 		return
 	}
 	if v, ok := p.fwdsvcs.Load(name); ok {
-		if err := v.(*ForwardingService).Close(); err != nil {
+		if err := v.(*ForwarderService).Close(); err != nil {
 			Logger.ErrorE(err)
 		}
 		p.fwdsvcs.Delete(name)

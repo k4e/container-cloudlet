@@ -9,11 +9,9 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.util.Arrays;
 import java.util.Random;
-import java.util.UUID;
 import java.util.function.Supplier;
 
 import com.github.k4e.CloudletClient;
-import com.github.k4e.types.ProtocolHeader;
 import com.github.k4e.types.Request;
 import com.google.common.base.Strings;
 import com.google.gson.Gson;
@@ -24,11 +22,6 @@ public class PerformanceTest {
     public static final int DEFAULT_DURATION_SEC = 30;
     public static final long DEFAULT_TIME_X_INTERVAL = 500L * 1000L * 1000L;
     private final Random random = new Random(101L);
-    private final UUID seshId;
-
-    public PerformanceTest(UUID seshId) {
-        this.seshId = seshId;
-    }
 
     public void deployTest(String hostAddr, Request.Deploy.Type type, String srcAddr)
     throws IOException, InterruptedException {
@@ -40,8 +33,6 @@ public class PerformanceTest {
             throw new IllegalArgumentException("type is FWD|LM but srcAddr is empty");
         }
         Gson gson = new Gson();
-        ProtocolHeader header = ProtocolHeader.create(seshId);
-        byte headerBytes[] = header.getBytes();
         Request r = CloudletClient.createAppSampleRequest(type, srcAddr);
         String req = gson.toJson(r);
         byte testData[] = "Hello_world @#$%".getBytes();
@@ -66,8 +57,6 @@ public class PerformanceTest {
             try (Socket sockApp = new Socket(hostAddr, CloudletClient.DEFAULT_APP_EXT_PORT)) {
                 OutputStream out = sockApp.getOutputStream();
                 InputStream in = sockApp.getInputStream();
-                out.write(headerBytes);
-                out.flush();
                 out.write(testData);
                 out.flush();
                 appReadCnt = in.read(buf);
@@ -104,8 +93,6 @@ public class PerformanceTest {
         if (count < 0) {
             count = DEFAULT_COUNT;
         }
-        ProtocolHeader header = ProtocolHeader.create(seshId);
-        byte headerBytes[] = header.getBytes();
         byte[] data = generateBytes(dataSizeBytes);
         byte[] buf = new byte[dataSizeBytes];
         int consistent = 0;
@@ -116,8 +103,6 @@ public class PerformanceTest {
         try (Socket sockApp = new Socket(hostAddr, CloudletClient.DEFAULT_APP_EXT_PORT)) {
             OutputStream out = sockApp.getOutputStream();
             InputStream in = sockApp.getInputStream();
-            out.write(headerBytes);
-            out.flush();
             for (int i = 0; i < count; ++i) {
                 startTime = System.nanoTime();
                 out.write(data);
@@ -160,8 +145,6 @@ public class PerformanceTest {
         }
         final int dataSizeBytes = 1 * 1024 * 1024;
         Gson gson = new Gson();
-        ProtocolHeader header = ProtocolHeader.create(seshId);
-        byte headerBytes[] = header.getBytes();
         Request request = CloudletClient.createAppSampleRequest(type, srcAddr);
         String req = gson.toJson(request);
         byte[] data = generateBytes(dataSizeBytes);
@@ -194,8 +177,6 @@ public class PerformanceTest {
             try (Socket sockApp = new Socket(hostAddr, CloudletClient.DEFAULT_APP_EXT_PORT)) {
                 OutputStream out = sockApp.getOutputStream();
                 InputStream in = sockApp.getInputStream();
-                out.write(headerBytes);
-                out.flush();
                 while (getCurrentTimeX.get() < duration * 1000000000L) {
                     boolean szTest = true;
                     out.write(data);
