@@ -20,15 +20,19 @@ const (
 type APICore struct {
 	HostConf *HostConf
 	HostAddr string
-	// TODO: fwdsvc のキーは (name, hostAddr) であるべきだ
-	fwdsvcs *sync.Map
+	resmap   *sync.Map
+}
+
+type DeployResource struct {
+	mux    sync.Mutex
+	fwdsvc *ForwarderService
 }
 
 func NewAPICore(hostConf *HostConf, hostAddr string) *APICore {
 	return &APICore{
 		HostConf: hostConf,
 		HostAddr: hostAddr,
-		fwdsvcs:  &sync.Map{},
+		resmap:   &sync.Map{},
 	}
 }
 
@@ -40,6 +44,8 @@ func (p *APICore) Deploy(req *Request) {
 		p.DeployFwd(req)
 	case DeployTypeLM:
 		p.DeployLM(req)
+	case DeployTypeFwdLM:
+		p.DeployFwdLM(req)
 	default:
 		Logger.Error("Unsupported deploy type: " + req.Deploy.Type)
 	}
@@ -55,6 +61,10 @@ func (p *APICore) DeployNew(req *Request) {
 	containerName := ToContainerName(name)
 	serviceName := ToServiceName(name)
 	clusterIPName := ToClusterIPName(name)
+	val, _ := p.resmap.LoadOrStore(name, &DeployResource{})
+	res := val.(*DeployResource)
+	defer res.mux.Unlock()
+	res.mux.Lock()
 	clientset, _, err := NewClient()
 	if err != nil {
 		Logger.ErrorE(err)
@@ -62,18 +72,18 @@ func (p *APICore) DeployNew(req *Request) {
 	}
 	newPod := p.createNewPod(clientset, name, podName, containerName, image, portIn, env, nil, nil)
 	clusterIP := p.createOrGetClusterIP(clientset, name, serviceName, clusterIPName, portIn)
-	if _, ok := p.fwdsvcs.Load(name); ok {
+	if res.fwdsvc != nil {
 		Logger.Info("Use existing forwarding service")
 	} else if clusterIP != "" {
 		clientAddr, appAddr, err := p.getForwardAddrs(portExt, clusterIP, portIn)
-		if err == nil {
-			if f, err := StartForwarderService("tcp", clientAddr, appAddr, false); err == nil {
-				p.fwdsvcs.Store(name, f)
-			} else {
-				Logger.ErrorE(err)
-			}
-		} else {
+		if err != nil {
 			Logger.ErrorE(err)
+		} else {
+			if fsv, err := StartForwarderService("tcp", clientAddr, appAddr, false); err != nil {
+				Logger.ErrorE(err)
+			} else {
+				res.fwdsvc = fsv
+			}
 		}
 	} else {
 		Logger.Error("Forwarding service cannot not started because ClusterIP is unknown")
@@ -90,18 +100,22 @@ func (p *APICore) DeployFwd(req *Request) {
 	srcAddr := req.Deploy.Fwd.SrcAddr
 	portIn := int32(req.Deploy.Fwd.Port.In)
 	portExt := int32(req.Deploy.Fwd.Port.Ext)
-	if _, ok := p.fwdsvcs.Load(name); ok {
+	val, _ := p.resmap.LoadOrStore(name, &DeployResource{})
+	res := val.(*DeployResource)
+	defer res.mux.Unlock()
+	res.mux.Lock()
+	if res.fwdsvc != nil {
 		Logger.Info("Use existing forwarding service")
 	} else {
 		clientAddr, remoteAddr, err := p.getForwardAddrs(portExt, srcAddr, portIn)
-		if err == nil {
-			if f, err := StartForwarderService("tcp", clientAddr, remoteAddr, true); err == nil {
-				p.fwdsvcs.Store(name, f)
-			} else {
-				Logger.ErrorE(err)
-			}
-		} else {
+		if err != nil {
 			Logger.ErrorE(err)
+		} else {
+			if fsv, err := StartForwarderService("tcp", clientAddr, remoteAddr, true); err != nil {
+				Logger.ErrorE(err)
+			} else {
+				res.fwdsvc = fsv
+			}
 		}
 	}
 }
@@ -118,6 +132,10 @@ func (p *APICore) DeployLM(req *Request) {
 	containerName := ToContainerName(name)
 	serviceName := ToServiceName(name)
 	clusterIPName := ToClusterIPName(name)
+	val, _ := p.resmap.LoadOrStore(name, &DeployResource{})
+	res := val.(*DeployResource)
+	defer res.mux.Unlock()
+	res.mux.Lock()
 	clientset, config, err := NewClient()
 	if err != nil {
 		Logger.ErrorE(err)
@@ -127,18 +145,18 @@ func (p *APICore) DeployLM(req *Request) {
 	newPod := p.createNewPod(clientset, name, podName, containerName, image, portIn, nil,
 		command, args)
 	clusterIP := p.createOrGetClusterIP(clientset, name, serviceName, clusterIPName, portIn)
-	if _, ok := p.fwdsvcs.Load(name); ok {
+	if res.fwdsvc != nil {
 		Logger.Info("Use existing forwarding service")
 	} else if clusterIP != "" {
 		clientAddr, appAddr, err := p.getForwardAddrs(portExt, clusterIP, portIn)
-		if err == nil {
-			if f, err := StartForwarderService("tcp", clientAddr, appAddr, false); err == nil {
-				p.fwdsvcs.Store(name, f)
-			} else {
-				Logger.ErrorE(err)
-			}
-		} else {
+		if err != nil {
 			Logger.ErrorE(err)
+		} else {
+			if fsv, err := StartForwarderService("tcp", clientAddr, appAddr, false); err != nil {
+				Logger.ErrorE(err)
+			} else {
+				res.fwdsvc = fsv
+			}
 		}
 	} else {
 		Logger.Error("Forwarding service cannot not started because ClusterIP is unknown")
@@ -146,8 +164,85 @@ func (p *APICore) DeployLM(req *Request) {
 	if newPod {
 		if err := WaitForPodReady(clientset, podName, WaitPodTimeout); err != nil {
 			Logger.ErrorE(err)
+		} else {
+			srcAPIServerAddr := fmt.Sprintf("%s:%d", srcAddr, APIServerPort)
+			restore := &LM_Restore{
+				HostConf:         p.HostConf,
+				Clientset:        clientset,
+				RestConfig:       config,
+				ThisAddr:         p.HostAddr,
+				DstNamespace:     namespace,
+				DstPodName:       podName,
+				DstContainerName: containerName,
+				SrcAddr:          srcAddr,
+				SrcAPIServerAddr: srcAPIServerAddr,
+				SrcName:          srcName,
+			}
+			if err := restore.ExecLM(); err != nil {
+				Logger.ErrorE(err)
+			}
+		}
+	} else {
+		Logger.Warn("Live migration was not performed because creating pod failed")
+	}
+}
+
+func (p *APICore) DeployFwdLM(req *Request) {
+	namespace := "default"
+	name := req.Deploy.Name
+	image := req.Deploy.FwdLM.Image
+	portIn := int32(req.Deploy.FwdLM.Port.In)
+	portExt := int32(req.Deploy.FwdLM.Port.Ext)
+	srcAddr := req.Deploy.FwdLM.SrcAddr
+	srcPort := int32(req.Deploy.FwdLM.SrcPort)
+	srcName := req.Deploy.FwdLM.SrcName
+	podName := ToPodName(name)
+	containerName := ToContainerName(name)
+	serviceName := ToServiceName(name)
+	clusterIPName := ToClusterIPName(name)
+	val, _ := p.resmap.LoadOrStore(name, &DeployResource{})
+	res := val.(*DeployResource)
+	defer res.mux.Unlock()
+	res.mux.Lock()
+	if res.fwdsvc != nil {
+		Logger.Info("Use existing forwarding service")
+	} else {
+		clientAddr, remoteAddr, err := p.getForwardAddrs(portExt, srcAddr, srcPort)
+		if err != nil {
+			Logger.ErrorE(err)
+		} else {
+			if fsv, err := StartForwarderService("tcp", clientAddr, remoteAddr, true); err != nil {
+				Logger.ErrorE(err)
+			} else {
+				res.fwdsvc = fsv
+			}
+		}
+	}
+	go func() {
+		clientset, config, err := NewClient()
+		if err != nil {
+			Logger.ErrorE(err)
+			return
+		}
+		command, args := GetRestorePodCommand()
+		newPod := p.createNewPod(clientset, name, podName, containerName, image, portIn, nil,
+			command, args)
+		clusterIP := p.createOrGetClusterIP(clientset, name, serviceName, clusterIPName, portIn)
+		if !newPod {
+			Logger.Warn("Live migration was not performed because creating pod failed")
+			return
+		}
+		if err := WaitForPodReady(clientset, podName, WaitPodTimeout); err != nil {
+			Logger.ErrorE(err)
+			return
 		}
 		srcAPIServerAddr := fmt.Sprintf("%s:%d", srcAddr, APIServerPort)
+		dstPodAddr := fmt.Sprintf("%s:%d", clusterIP, portIn)
+		dstPodTCPAddr, err := net.ResolveTCPAddr("tcp", dstPodAddr)
+		if err != nil {
+			Logger.ErrorE(errors.WithStack(err))
+			return
+		}
 		restore := &LM_Restore{
 			HostConf:         p.HostConf,
 			Clientset:        clientset,
@@ -159,13 +254,13 @@ func (p *APICore) DeployLM(req *Request) {
 			SrcAddr:          srcAddr,
 			SrcAPIServerAddr: srcAPIServerAddr,
 			SrcName:          srcName,
+			Fwdsvc:           res.fwdsvc,
+			DstPodAddr:       dstPodTCPAddr,
 		}
-		if err := restore.Exec(); err != nil {
+		if err := restore.ExecFwdLM(); err != nil {
 			Logger.ErrorE(err)
 		}
-	} else {
-		Logger.Warn("Live migration was not performed because creating pod failed")
-	}
+	}()
 }
 
 func (p *APICore) DumpStart(req *Request) *Response {
@@ -175,6 +270,10 @@ func (p *APICore) DumpStart(req *Request) *Response {
 	dstHostAddr := req.DumpStart.DstAddr
 	podName := ToPodName(name)
 	containerName := ToContainerName(name)
+	val, _ := p.resmap.LoadOrStore(name, &DeployResource{})
+	res := val.(*DeployResource)
+	defer res.mux.Unlock()
+	res.mux.Lock()
 	clientset, config, err := NewClient()
 	if err != nil {
 		Logger.ErrorE(err)
@@ -200,16 +299,20 @@ func (p *APICore) Remove(req *Request) {
 	name := req.Remove.Name
 	podName := name + "-pod"
 	serviceName := name + "-svc"
+	val, _ := p.resmap.LoadOrStore(name, &DeployResource{})
+	res := val.(*DeployResource)
+	defer res.mux.Unlock()
+	res.mux.Lock()
 	clientset, _, err := NewClient()
 	if err != nil {
 		Logger.ErrorE(err)
 		return
 	}
-	if v, ok := p.fwdsvcs.Load(name); ok {
-		if err := v.(*ForwarderService).Close(); err != nil {
-			Logger.ErrorE(err)
+	if res.fwdsvc != nil {
+		if err := res.fwdsvc.Close(); err != nil {
+			Logger.Warn(err.Error())
 		}
-		p.fwdsvcs.Delete(name)
+		res.fwdsvc = nil
 	}
 	if err, errStack := DeleteService(clientset, serviceName); err != nil {
 		if k8serrors.IsNotFound(err) {

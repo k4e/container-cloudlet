@@ -50,12 +50,27 @@ type LM_Restore struct {
 	SrcAddr          string
 	SrcAPIServerAddr string
 	SrcName          string
+	Fwdsvc           *ForwarderService
+	DstPodAddr       *net.TCPAddr
 }
 
-func (p *LM_Restore) Exec() error {
-	var startTime time.Time
-	var endTime time.Time
-	Logger.Debug("[Restore] Listen to resume signal")
+func (p *LM_Restore) ExecLM() error {
+	return p.exec(false)
+}
+
+func (p *LM_Restore) ExecFwdLM() error {
+	return p.exec(true)
+}
+
+func (p *LM_Restore) exec(withFwd bool) (reterr error) {
+	defer func() {
+		if reterr != nil {
+			Logger.Warn("[Restore] Abort")
+		} else {
+			Logger.Info("[Restore] Complete")
+		}
+	}()
+	Logger.Info("[Restore] Listen to resume signal")
 	lnResumeAddr := fmt.Sprintf(":%d", LM_HostResumeSigPort)
 	lnResume, err := net.Listen("tcp", lnResumeAddr)
 	if err != nil {
@@ -74,13 +89,13 @@ func (p *LM_Restore) Exec() error {
 			}
 			return
 		}
-		Logger.Debug("[Restore] Resume signal accept")
+		Logger.Info("[Restore] Resume signal accept")
 		defer conn.Close()
 		conn.SetDeadline(time.Now().Add(1 * time.Second))
 		buf := make([]byte, 1)
 		_, _ = conn.Read(buf)
 	}()
-	Logger.Debug("[Restore] Prepare post-resume script")
+	Logger.Info("[Restore] Prepare post-resume script")
 	postResumeScript := fmt.Sprintf("#!/bin/sh\n"+
 		"if test \"$CRTOOLS_SCRIPT_ACTION\" = \"post-resume\"; then echo Send resume signal; nc -vz %s %d; fi\n",
 		p.ThisAddr, LM_HostResumeSigPort)
@@ -88,12 +103,12 @@ func (p *LM_Restore) Exec() error {
 		os.Stderr, LM_PostResumeScriptPath, postResumeScript, "755"); err != nil {
 		return err
 	}
-	Logger.Debug("[Restore] Exec rsync --daemon")
+	Logger.Info("[Restore] Exec rsync --daemon")
 	if err := ExecutePod(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName,
 		nil, os.Stdout, os.Stderr, "/bin/sh", "-c", "rsync --daemon"); err != nil {
 		return err
 	}
-	Logger.Debug("[Restore] Send DumpStart request")
+	Logger.Info("[Restore] Send DumpStart request")
 	if resp, err := p.sendDumpStartRequest(); err != nil {
 		return err
 	} else if !resp.Ok {
@@ -107,27 +122,35 @@ func (p *LM_Restore) Exec() error {
 	defer conn.Close()
 	k8sPortFwdCloseChan := make(chan struct{})
 	defer close(k8sPortFwdCloseChan)
-	Logger.Debug("[Restore] Open kube port-forward")
+	Logger.Info("[Restore] Open kube port-forward")
 	if err := OpenKubePortForwardReady(p.RestConfig, p.DstNamespace, p.DstPodName,
 		LM_HostDataPort, LM_PodRsyncPort, os.Stdout, os.Stderr, k8sPortFwdCloseChan); err != nil {
 		return err
 	}
-	Logger.Debug("[Restore] Send pre-dump request")
-	startTime = time.Now()
+	Logger.Info("[Restore] Send pre-dump request")
+	startPreDump := time.Now()
 	if err := p.sendDumpServiceRequest(conn, LM_MsgReqPreDump); err != nil {
 		return err
 	}
-	endTime = time.Now()
-	Logger.DebugF("[Restore] Pre-dump time (ms): %d\n", endTime.Sub(startTime).Milliseconds())
-	Logger.Debug("[Restore] Send final dump request")
-	startTime = time.Now()
+	Logger.DebugF("[Restore] Pre-dump time (ms): %d\n", time.Now().Sub(startPreDump).Milliseconds())
+	if withFwd {
+		Logger.Info("[Restore] Suspend forwarding service")
+		p.Fwdsvc.Suspend()
+		defer func() {
+			Logger.Info("[Restore] Resume forwarding service")
+			p.Fwdsvc.Resume()
+		}()
+		Logger.Info("[Restore] Close all forwarding streams")
+		p.Fwdsvc.CloseAllForwarders()
+	}
+	Logger.Info("[Restore] Send final dump request")
+	startFinalDump := time.Now()
 	startDowntime := time.Now()
 	if err := p.sendDumpServiceRequest(conn, LM_MsgReqDump); err != nil {
 		return err
 	}
-	endTime = time.Now()
-	Logger.DebugF("[Restore] Final dump time (ms): %d\n", endTime.Sub(startTime).Milliseconds())
-	Logger.Debug("[Restore] Exec unshare criu restore")
+	Logger.DebugF("[Restore] Final dump time (ms): %d\n", time.Now().Sub(startFinalDump).Milliseconds())
+	Logger.Info("[Restore] Exec unshare criu restore")
 	timeoutChan := make(chan struct{}, 1)
 	go func() {
 		defer close(timeoutChan)
@@ -154,6 +177,10 @@ func (p *LM_Restore) Exec() error {
 		default:
 			time.Sleep(10 * time.Millisecond)
 		}
+	}
+	if withFwd {
+		Logger.Info("[Restore] Change forwarding dst addr to the restored pod")
+		p.Fwdsvc.ChangeServerAddr(p.DstPodAddr)
 	}
 	return nil
 }
@@ -220,12 +247,19 @@ type LM_DumpService struct {
 }
 
 func (p *LM_DumpService) Start() (reterr error) {
+	defer func() {
+		if reterr != nil {
+			Logger.Warn("[Dump] Abort")
+		} else {
+			Logger.Info("[Dump] Complete")
+		}
+	}()
 	lnAddr := fmt.Sprintf(":%d", LM_HostMsgPort)
 	lnTCPAddr, err := net.ResolveTCPAddr("tcp", lnAddr)
 	if err != nil {
 		return err
 	}
-	Logger.Debug("[Dump] Open message listener")
+	Logger.Info("[Dump] Open message listener")
 	ln, err := net.ListenTCP("tcp", lnTCPAddr)
 	if err != nil {
 		return err
@@ -247,11 +281,11 @@ func (p *LM_DumpService) Start() (reterr error) {
 			close(sshCloseChan)
 		}
 	}()
-	Logger.Debug("[Dump] Open SSH tunnel")
+	Logger.Info("[Dump] Open SSH tunnel")
 	if err := sshClient.OpenTunnel(hostEndAddr, remoteEndAddr, sshCloseChan); err != nil {
 		return err
 	}
-	Logger.Debug("[Dump] Get main pid")
+	Logger.Info("[Dump] Get main pid")
 	pid, err := p.getMainPid()
 	if err != nil {
 		return err
@@ -271,7 +305,7 @@ func (p *LM_DumpService) Start() (reterr error) {
 		for itercnt := 1; true; itercnt++ {
 			if n, err := conn.Read(reqbuf); !(n > 0) {
 				if err == io.EOF {
-					Logger.Debug("[Dump][svc] Received EOF")
+					Logger.Info("[Dump][svc] Received EOF")
 				} else if err != nil {
 					Logger.ErrorE(err)
 				} else {
@@ -293,7 +327,7 @@ func (p *LM_DumpService) Start() (reterr error) {
 					pid, imagesDir, prevImagesDirOpt)
 				fmt.Fprintf(&argb, " && rsync -rlOt %s/ rsync://%s:%d/%s",
 					LM_RsyncModuleDirectory, p.ThisAddr, LM_HostDataPort, LM_RsyncModuleName)
-				Logger.Debug("[Dump][svc] Exec mkdir && criu pre-dump && rsync")
+				Logger.Info("[Dump][svc] Exec mkdir && criu pre-dump && rsync")
 				if err := ExecutePod(p.Clientset, p.RestConfig, p.Namespace, p.PodName, p.ContainerName,
 					nil, os.Stdout, os.Stderr, "/bin/sh", "-c", argb.String()); err != nil {
 					Logger.ErrorE(err)
@@ -313,7 +347,7 @@ func (p *LM_DumpService) Start() (reterr error) {
 					pid, imagesDir, prevImagesDirOpt)
 				fmt.Fprintf(&argb, " && rsync -rlOt %s/ rsync://%s:%d/%s",
 					LM_RsyncModuleDirectory, p.ThisAddr, LM_HostDataPort, LM_RsyncModuleName)
-				Logger.Debug("[Dump][svc] Exec mkdir && criu dump && rsync")
+				Logger.Info("[Dump][svc] Exec mkdir && criu dump && rsync")
 				if err := ExecutePod(p.Clientset, p.RestConfig, p.Namespace, p.PodName, p.ContainerName,
 					nil, os.Stdout, os.Stderr, "/bin/sh", "-c", argb.String()); err != nil {
 					Logger.ErrorE(err)

@@ -17,7 +17,7 @@ public class Request implements Serializable {
     public static class Deploy implements Serializable {
         private static final long serialVersionUID = -204586336929613360L;
         public enum Type {
-            NEW("new"), FWD("fwd"), LM("lm");
+            NEW("new"), FWD("fwd"), LM("lm"), FWDLM("fwdlm");
             public static Type valueOfIgnoreCase(String s) {
                 for (Type t : values()) {
                     if (t.name().equalsIgnoreCase(s)) {
@@ -76,17 +76,34 @@ public class Request implements Serializable {
                 this.port = port;
             }
         }
+        public static class FwdLM implements Serializable {
+            private static final long serialVersionUID = -678769254653996184L;
+            public String image;
+            public String srcAddr;
+            public String srcName;
+            public Integer srcPort;
+            public Port port;
+            public FwdLM(String image, String srcAddr, String srcName, int srcPort, Port port) {
+                this.image = image;
+                this.srcAddr = srcAddr;
+                this.srcName = srcName;
+                this.srcPort = srcPort;
+                this.port = port;
+            }
+        }
         public String name;
         public String type;
         public NewApp newApp;
         public Fwd fwd;
         public LM lm;
-        public Deploy(String name, Type type, NewApp newApp, Fwd fwd, LM lm) {
+        public FwdLM fwdlm;
+        public Deploy(String name, Type type, NewApp newApp, Fwd fwd, LM lm, FwdLM fwdlm) {
             this.name = name;
             this.type = type.getTypeName();
             this.newApp = newApp;
             this.fwd = fwd;
             this.lm = lm;
+            this.fwdlm = fwdlm;
         }
     }
 

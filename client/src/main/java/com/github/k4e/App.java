@@ -54,7 +54,9 @@ public class App {
             System.exit(-1);
         }
         String srcAddr = null;
-        if (ctype == Request.Deploy.Type.LM || ctype == Request.Deploy.Type.FWD) {
+        if (ctype == Request.Deploy.Type.LM
+                || ctype == Request.Deploy.Type.FWD
+                || ctype == Request.Deploy.Type.FWDLM) {
             if (args.length < 4) {
                 System.err.println("Src addr is required");
                 System.exit(-1);
@@ -138,7 +140,9 @@ public class App {
             System.exit(-1);
         }
         String srcAddr = null;
-        if (ctype == Request.Deploy.Type.LM || ctype == Request.Deploy.Type.FWD) {
+        if (ctype == Request.Deploy.Type.LM
+                || ctype == Request.Deploy.Type.FWD
+                || ctype == Request.Deploy.Type.FWDLM) {
             if (args.length < 5) {
                 System.err.println("Src addr is required");
                 System.exit(-1);
@@ -189,7 +193,9 @@ public class App {
             System.exit(-1);
         }
         String srcAddr = null;
-        if (ctype == Request.Deploy.Type.LM || ctype == Request.Deploy.Type.FWD) {
+        if (ctype == Request.Deploy.Type.LM
+                || ctype == Request.Deploy.Type.FWD
+                || ctype == Request.Deploy.Type.FWDLM) {
             if (args.length < 5) {
                 System.err.println("Src addr is required");
                 System.exit(-1);

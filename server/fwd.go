@@ -7,110 +7,145 @@ package main
 */
 
 import (
-	stderrors "errors"
 	"io"
 	"net"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/pkg/errors"
 )
 
-const KeepSec = 60.
-const TimeoutDuration = 1000 * time.Millisecond
-const RetryInterval = 1000 * time.Millisecond
-const BufferSize = 32 * 1024 * 1024
-
-func IsDeadlineExceeded(err error) bool {
-	nerr, ok := err.(net.Error)
-	if !ok {
-		return false
-	}
-	if !nerr.Timeout() {
-		return false
-	}
-	if !stderrors.Is(err, os.ErrDeadlineExceeded) {
-		return false
-	}
-	return true
-}
+const (
+	Fwdr_ConnReadTimeoutDuration = 10 * time.Millisecond
+	Fwdr_BufferSize              = 32 * 1024 * 1024
+)
 
 type Forwarder struct {
-	keep       bool
-	serverConn *ConnClosable
-	muxStream  sync.Mutex
-	upAlive    bool
-	upBuf      []byte
-	upBufLB    int
-	upBufUB    int
-	downAlive  bool
-	downBuf    []byte
-	downBufLB  int
-	downBufUB  int
+	initParam struct {
+		network    string
+		serverAddr *net.TCPAddr
+		clientConn *net.TCPConn
+	}
+	muxStream               sync.Mutex
+	upAlive                 bool
+	downAlive               bool
+	chanClosed              chan struct{}
+	condUsingStreamConn     *sync.Cond
+	cntUsingStreamConn      int
+	condSuspendedStreamConn *sync.Cond
+	isSuspendedStreamConn   bool
 }
 
-func AcceptForwarder(
-	ln *net.TCPListener,
+func NewForwarder(
 	network string,
 	serverAddr *net.TCPAddr,
-	isExtHost bool,
-) error {
-	if serverAddr == nil {
-		return errors.New("serverAddr is empty")
-	}
-	clientConn, err := ln.AcceptTCP()
-	if err != nil {
-		return err
-	}
-	Logger.Debug("Accept: " + clientConn.RemoteAddr().String())
-	fwd := newForwarder()
-	go fwd.start(NewConnClosable(clientConn), network, serverAddr, false)
-	return nil
+	clientConn *net.TCPConn,
+) *Forwarder {
+	fwdr := &Forwarder{}
+	fwdr.initParam.network = network
+	fwdr.initParam.serverAddr = serverAddr
+	fwdr.initParam.clientConn = clientConn
+	fwdr.chanClosed = make(chan struct{})
+	fwdr.condUsingStreamConn = sync.NewCond(&sync.Mutex{})
+	fwdr.condSuspendedStreamConn = sync.NewCond(&sync.Mutex{})
+	return fwdr
 }
 
-func newForwarder() *Forwarder {
-	p := &Forwarder{}
-	p.upBuf = make([]byte, BufferSize)
-	p.downBuf = make([]byte, BufferSize)
-	return p
-}
-
-func (p *Forwarder) start(
-	clientConn *ConnClosable,
-	network string,
-	serverAddr *net.TCPAddr,
-	resume bool,
-) {
+func (p *Forwarder) Open() {
+	clientConn := p.initParam.clientConn
+	defer func() {
+		Logger.DebugF("[Fwd] Close: %s <--> %s\n",
+			clientConn.RemoteAddr().String(), p.initParam.serverAddr.String())
+	}()
+	Logger.DebugF("[Fwd] Open: %s <--> %s\n",
+		clientConn.RemoteAddr().String(), p.initParam.serverAddr.String())
 	p.setStreamsAlive(false)
-	var serverConn *ConnClosable
-	if true {
-		conn, err := net.DialTCP(network, nil, serverAddr)
-		if err != nil {
-			Logger.ErrorE(err)
-			Logger.Debug("Client conn close")
-			if err := clientConn.Close(); err != nil {
-				Logger.Warn("Warning: clientConn.Close: " + err.Error())
-			}
-			return
+	serverConn, err := p.dialTCP(p.initParam.network, p.initParam.serverAddr)
+	if err != nil {
+		Logger.ErrorE(err)
+		Logger.Debug("[Fwd] Client conn close")
+		if err := clientConn.Close(); err != nil {
+			Logger.Warn("[Fwd] clientConn.Close: " + err.Error())
 		}
-		Logger.Debug("Server conn open")
-		serverConn = NewConnClosable(conn)
+		return
 	}
+	Logger.Debug("[Fwd] Server conn open")
 	p.setStreamsAlive(true)
 	wg := &sync.WaitGroup{}
 	wg.Add(2)
 	go p.upstream(clientConn, serverConn, wg)
 	go p.downstream(clientConn, serverConn, wg)
 	wg.Wait()
-	clientConn.Close()
-	serverConn.Close()
+	if err := serverConn.Close(); err != nil {
+		Logger.Warn("[Fwd] serverConn.Close: " + err.Error())
+	}
+	close(p.chanClosed)
 }
 
-func (p *Forwarder) getStreamsAlive() bool {
-	defer p.muxStream.Unlock()
+func (p *Forwarder) Close() {
+	p.SuspendStream()
+	p.setStreamsAlive(false)
+	p.ResumeStream()
+	<-p.chanClosed
+}
+
+func (p *Forwarder) SuspendStream() {
+	p.condSuspendedStreamConn.L.Lock()
+	p.isSuspendedStreamConn = true
+	p.condSuspendedStreamConn.Broadcast()
+	p.condSuspendedStreamConn.L.Unlock()
+	p.condUsingStreamConn.L.Lock()
+	for p.cntUsingStreamConn > 0 {
+		p.condUsingStreamConn.Wait()
+	}
+	p.condUsingStreamConn.L.Unlock()
+}
+
+func (p *Forwarder) ResumeStream() {
+	p.condSuspendedStreamConn.L.Lock()
+	p.isSuspendedStreamConn = false
+	p.condSuspendedStreamConn.Broadcast()
+	p.condSuspendedStreamConn.L.Unlock()
+}
+
+func (p *Forwarder) dialTCP(network string, serverAddr *net.TCPAddr) (*net.TCPConn, error) {
+	conn, err := net.DialTCP(network, nil, serverAddr)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return conn, nil
+}
+
+func (p *Forwarder) enterStreamConnSection() bool {
+	p.condSuspendedStreamConn.L.Lock()
+	for p.isSuspendedStreamConn {
+		p.condSuspendedStreamConn.Wait()
+	}
+	p.condSuspendedStreamConn.L.Unlock()
+	p.condUsingStreamConn.L.Lock()
+	p.cntUsingStreamConn++
+	if p.cntUsingStreamConn > 2 {
+		panic("number of routines using stream conn > 2")
+	}
+	p.condUsingStreamConn.Broadcast()
+	p.condUsingStreamConn.L.Unlock()
 	p.muxStream.Lock()
-	return p.upAlive && p.downAlive
+	if !p.upAlive || !p.downAlive {
+		p.muxStream.Unlock()
+		return false
+	}
+	p.muxStream.Unlock()
+	return true
+}
+
+func (p *Forwarder) leaveStreamConnSection() {
+	p.condUsingStreamConn.L.Lock()
+	p.cntUsingStreamConn--
+	if p.cntUsingStreamConn < 0 {
+		panic("number of routines using stream conn < 0")
+	}
+	p.condUsingStreamConn.Broadcast()
+	p.condUsingStreamConn.L.Unlock()
 }
 
 func (p *Forwarder) setStreamsAlive(b bool) {
@@ -132,198 +167,106 @@ func (p *Forwarder) setDownstreamAlive(b bool) {
 	p.downAlive = b
 }
 
-func (p *Forwarder) upstream(clientConn, serverConn *ConnClosable, wg *sync.WaitGroup) {
+func (p *Forwarder) upstream(clientConn, serverConn *net.TCPConn, wg *sync.WaitGroup) {
 	defer func() {
-		Logger.Debug("upstream: finish")
+		Logger.Debug("[Fwd] Upstream: finish")
 		p.setUpstreamAlive(false)
 		if wg != nil {
 			wg.Done()
 		}
 	}()
-	// ct := &CountdownTimer{Deadline: KeepSec}
-	for p.getStreamsAlive() {
-		var cerr error
-		if p.upBufUB == 0 {
-			if err := clientConn.SetReadDeadline(time.Now().Add(TimeoutDuration)); err != nil {
-				Logger.Warn("Warning: clientConn.SetReadDeadline: " + err.Error())
-			}
-			p.upBufUB, cerr = clientConn.Read(p.upBuf)
-			p.upBufLB = 0
+	buf := make([]byte, Fwdr_BufferSize)
+	for {
+		if !p.enterStreamConnSection() {
+			p.leaveStreamConnSection()
+			return
 		}
-		if p.upBufUB > 0 {
-			for p.getStreamsAlive() {
-				if serverConn.IsClosed() {
-					return
-				}
-				if err := serverConn.SetWriteDeadline(time.Now().Add(TimeoutDuration)); err != nil {
-					Logger.Warn("Warning: serverConn.SetWriteDeadline: " + err.Error())
-				}
-				m, herr := serverConn.Write(p.upBuf[p.upBufLB:p.upBufUB])
-				Logger.TraceF("upstream: Wrote: %s", p.upBuf[p.upBufLB:p.upBufUB])
-				p.upBufLB += m
-				if herr != nil {
-					if IsDeadlineExceeded(herr) {
-						continue
-					} else {
-						return
-					}
-				}
-				break
-			}
-			p.upBufUB = 0
-			p.upBufLB = 0
+		if err := clientConn.SetReadDeadline(time.Now().Add(Fwdr_ConnReadTimeoutDuration)); err != nil {
+			Logger.Warn("[Fwd] Upstream: clientConn.SetReadDeadline: " + err.Error())
 		}
+		nr, cerr := clientConn.Read(buf)
+		flagReturn := false
+		if nr > 0 {
+			nw, serr := serverConn.Write(buf[0:nr])
+			if serr != nil {
+				if IsClosedError(serr) {
+					Logger.Debug("[Fwd] Upstream: server is close")
+				} else if nr != nw {
+					Logger.ErrorE(errors.WithStack(io.ErrShortWrite))
+				} else {
+					Logger.ErrorE(errors.WithStack(serr))
+				}
+				flagReturn = true
+			} else {
+				Logger.TraceF("[Fwd] Upstream: wrote: %s", buf[0:nw])
+			}
+		}
+		p.leaveStreamConnSection()
 		if cerr != nil {
 			if IsDeadlineExceeded(cerr) {
 				continue
-			} else if (cerr == io.EOF) || IsClosedError(cerr) {
-				Logger.Debug("upstream: client reached end")
-				return
-				// first := !ct.isRunning()
-				// if p.keep && ct.runContinue() {
-				// 	if first {
-				// 		Logger.Info("upstream: reconnect waiting")
-				// 	}
-				// 	sleep()
-				// 	continue
-				// } else {
-				// 	return
-				// }
+			}
+			if (cerr == io.EOF) || IsClosedError(cerr) {
+				Logger.Debug("[Fwd] Upstream: client reached end")
 			} else {
-				Logger.ErrorE(cerr)
-				return
+				Logger.ErrorE(errors.WithStack(cerr))
 			}
+			return
 		}
-		// ct.reset()
-	}
-}
-
-func (p *Forwarder) downstream(clientConn, serverConn *ConnClosable, wg *sync.WaitGroup) {
-	defer func() {
-		Logger.Debug("downstream: finish")
-		p.setDownstreamAlive(false)
-		if wg != nil {
-			wg.Done()
-		}
-	}()
-	// ct := &CountdownTimer{Deadline: KeepSec}
-	for p.getStreamsAlive() {
-		var herr error
-		if p.downBufUB == 0 {
-			if serverConn.IsClosed() {
-				return
-			}
-			if err := serverConn.SetReadDeadline(time.Now().Add(TimeoutDuration)); err != nil {
-				Logger.Warn("Warning: serverConn.SetReadDeadline: " + err.Error())
-			}
-			p.downBufUB, herr = serverConn.Read(p.downBuf)
-			p.downBufLB = 0
-		}
-		if p.downBufUB > 0 {
-			for p.getStreamsAlive() {
-				if clientConn.IsClosed() {
-					return
-				}
-				if err := clientConn.SetWriteDeadline(time.Now().Add(TimeoutDuration)); err != nil {
-					Logger.Warn("Warning: clientConn.SetWriteDeadline: " + err.Error())
-				}
-				m, cerr := clientConn.Write(p.downBuf[p.downBufLB:p.downBufUB])
-				Logger.TraceF("downstream: Wrote: %s\n", p.downBuf[p.downBufLB:p.downBufUB])
-				p.downBufUB += m
-				if cerr != nil {
-					if IsDeadlineExceeded(cerr) {
-						continue
-					} else if IsClosedError(cerr) {
-						Logger.Debug("downstream: client is close")
-						return
-						// first := !ct.isRunning()
-						// if p.keep && ct.runContinue() {
-						// 	if first {
-						// 		Logger.Info("downstream: reconnect waiting")
-						// 	}
-						// 	sleep()
-						// 	continue
-						// } else {
-						// 	return
-						// }
-					} else {
-						Logger.ErrorE(cerr)
-						return
-					}
-				}
-				p.downBufUB = 0
-				p.downBufLB = 0
-				break
-			}
-			// ct.reset()
-		}
-		if herr != nil {
-			if IsDeadlineExceeded(herr) {
-				continue
-			}
-			if herr == io.EOF {
-				Logger.Debug("downstream: server reached end")
-			} else {
-				Logger.ErrorE(herr)
-			}
+		if flagReturn {
 			return
 		}
 	}
 }
 
-type net_TCPConn = net.TCPConn
-
-type ConnClosable struct {
-	*net_TCPConn
-	cmux   sync.Mutex
-	closed bool
-}
-
-func NewConnClosable(tcpConn *net.TCPConn) *ConnClosable {
-	return &ConnClosable{
-		net_TCPConn: tcpConn,
+func (p *Forwarder) downstream(clientConn, serverConn *net.TCPConn, wg *sync.WaitGroup) {
+	defer func() {
+		Logger.Debug("[Fwd] Downstream: finish")
+		p.setDownstreamAlive(false)
+		if wg != nil {
+			wg.Done()
+		}
+	}()
+	buf := make([]byte, Fwdr_BufferSize)
+	for {
+		if !p.enterStreamConnSection() {
+			p.leaveStreamConnSection()
+			return
+		}
+		if err := serverConn.SetReadDeadline(time.Now().Add(Fwdr_ConnReadTimeoutDuration)); err != nil {
+			Logger.Warn("[Fwd] Downstream: serverConn.SetReadDeadline: " + err.Error())
+		}
+		nr, serr := serverConn.Read(buf)
+		flagReturn := false
+		if nr > 0 {
+			nw, cerr := clientConn.Write(buf[0:nr])
+			if cerr != nil {
+				if IsClosedError(cerr) {
+					Logger.Debug("[Fwd] Downstream: client is close")
+				} else if nr != nw {
+					Logger.ErrorE(errors.WithStack(io.ErrShortWrite))
+				} else {
+					Logger.ErrorE(errors.WithStack(cerr))
+				}
+				flagReturn = true
+			} else {
+				Logger.TraceF("[Fwd] Downstream: wrote: %s\n", buf[0:nw])
+			}
+		}
+		p.leaveStreamConnSection()
+		if serr != nil {
+			if IsDeadlineExceeded(serr) {
+				continue
+			}
+			if (serr == io.EOF) || IsClosedError(serr) {
+				Logger.Debug("[Fwd] Downstream: server reached end")
+			} else {
+				Logger.ErrorE(serr)
+			}
+			return
+		}
+		if flagReturn {
+			return
+		}
 	}
-}
-
-func (p *ConnClosable) IsClosed() bool {
-	defer p.cmux.Unlock()
-	p.cmux.Lock()
-	return p.closed
-}
-
-func (p *ConnClosable) Close() error {
-	defer p.cmux.Unlock()
-	p.cmux.Lock()
-	if p.closed {
-		return nil
-	}
-	err := p.net_TCPConn.Close()
-	p.closed = true
-	return err
-}
-
-type CountdownTimer struct {
-	Deadline float64
-	start    time.Time
-	running  bool
-}
-
-func (p *CountdownTimer) reset() {
-	p.running = false
-}
-
-func (p *CountdownTimer) isRunning() bool {
-	return p.running
-}
-
-func (p *CountdownTimer) runContinue() bool {
-	if !p.running {
-		p.start = time.Now()
-		p.running = true
-	}
-	return time.Now().Sub(p.start).Seconds() < p.Deadline
-}
-
-func sleep() {
-	time.Sleep(RetryInterval)
 }

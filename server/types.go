@@ -1,9 +1,10 @@
 package main
 
 const (
-	DeployTypeNew = "new"
-	DeployTypeFwd = "fwd"
-	DeployTypeLM  = "lm"
+	DeployTypeNew   = "new"
+	DeployTypeFwd   = "fwd"
+	DeployTypeLM    = "lm"
+	DeployTypeFwdLM = "fwdlm"
 )
 
 type Request struct {
@@ -35,6 +36,16 @@ type Request struct {
 				Ext int `json:"ext"`
 			} `json:"port"`
 		} `json:"lm"`
+		FwdLM struct {
+			Image   string `json:"image"`
+			SrcAddr string `json:"srcAddr"`
+			SrcName string `json:"srcName"`
+			SrcPort int    `json:"srcPort"`
+			Port    struct {
+				In  int `json:"in"`
+				Ext int `json:"ext"`
+			} `json:"port"`
+		} `json:"fwdlm"`
 	} `json:"deploy"`
 	Remove struct {
 		Name string `json:"name"`

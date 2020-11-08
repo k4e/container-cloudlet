@@ -22,6 +22,7 @@ public class CloudletClient {
         Request.Deploy.NewApp newApp = null;
         Request.Deploy.Fwd fwd = null;
         Request.Deploy.LM lm = null;
+        Request.Deploy.FwdLM fwdlm = null;
         if (type == Request.Deploy.Type.NEW) {
             newApp = new Request.Deploy.NewApp(DEFAULT_IMAGE, appPort, DEFAULT_ENV);
         }
@@ -31,7 +32,10 @@ public class CloudletClient {
         if (type == Request.Deploy.Type.LM) {
            lm = new Request.Deploy.LM(DEFAULT_IMAGE, srcAddr, DEFAULT_NAME, appPort);
         }
-        return Request.deploy(new Request.Deploy(DEFAULT_NAME, type, newApp, fwd, lm));
+        if (type == Request.Deploy.Type.FWDLM) {
+            fwdlm = new Request.Deploy.FwdLM(DEFAULT_IMAGE, srcAddr, DEFAULT_NAME, DEFAULT_APP_EXT_PORT, appPort);
+        }
+        return Request.deploy(new Request.Deploy(DEFAULT_NAME, type, newApp, fwd, lm, fwdlm));
     }
 
     public static void deploy(String host, Request.Deploy.Type type, String srcAddr) throws IOException {

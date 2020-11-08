@@ -19,7 +19,7 @@ import com.google.gson.Gson;
 public class PerformanceTest {
 
     public static final int DEFAULT_COUNT = 10;
-    public static final int DEFAULT_DURATION_SEC = 30;
+    public static final int DEFAULT_DURATION_SEC = 20;
     public static final long DEFAULT_TIME_X_INTERVAL = 500L * 1000L * 1000L;
     private final Random random = new Random(101L);
 
@@ -186,7 +186,7 @@ public class PerformanceTest {
                     while (readSz < wroteSz) {
                         int n = in.read(buf, readSz, buf.length - readSz);
                         if (!(n > 0)) {
-                            System.out.println("Read returned " + n);
+                            System.out.println("# Read returned " + n);
                             break;
                         }
                         readSz += n;
@@ -219,8 +219,9 @@ public class PerformanceTest {
                 }
             } catch (IOException e) {
                 ++cntError;
+                System.out.println("# Exception: " + e.getMessage());
                 lastError = e.getMessage();
-                Thread.sleep(50);
+                Thread.sleep(10);
             }
         }
         System.out.printf("Test result: consistent: %d, inconsistent: %d\n", consistent, inconsistent);
@@ -245,7 +246,7 @@ public class PerformanceTest {
             ans = true;
         } else {
             ans = false;
-            System.out.printf("Size test failed: wrote: %dB, read: %dB\n", wroteSz, readSz);
+            System.out.printf("# Size test failed: wrote: %dB, read: %dB\n", wroteSz, readSz);
         }
         return ans;
     }
@@ -257,7 +258,7 @@ public class PerformanceTest {
             int j = (fullCheck ? t : random.nextInt(upperBound));
             if (data[j] != buf[j]) {
                 ans = false;
-                System.out.printf("Random test failed: wrote[%d]=0x%x but read[%d]=0x%x\n",
+                System.out.printf("# Random test failed: wrote[%d]=0x%x but read[%d]=0x%x\n",
                         j, data[j], j, buf[j]);
                 break;
             }
