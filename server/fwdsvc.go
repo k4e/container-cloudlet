@@ -132,19 +132,15 @@ func (p *ForwarderService) listener(ln *net.TCPListener) {
 			}
 		}
 		Logger.Debug("[Fwdsvc] Accept client conn: " + clientConn.RemoteAddr().String())
-		fwdr := NewForwarder(p.network, p.serverAddr, clientConn)
+		fwdr := NewForwarder()
 		p.muxFwdrs.Lock()
 		elem := p.fwdrs.PushBack(fwdr)
 		p.muxFwdrs.Unlock()
 		go func() {
-			fwdr.Open()
+			fwdr.Accept(p.network, p.serverAddr, clientConn)
 			p.muxFwdrs.Lock()
 			p.fwdrs.Remove(elem)
 			p.muxFwdrs.Unlock()
-			Logger.Debug("[Fwdsvc] Close client conn: " + clientConn.RemoteAddr().String())
-			if err := clientConn.Close(); err != nil {
-				Logger.Warn("[Fwdsvc] clientConn.Close: " + err.Error())
-			}
 		}()
 	}
 }
