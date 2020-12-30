@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	APIServerPort  = 9999
-	RequestTimeout = 30
+	APIServerPort          = 9999
+	RequestTimeout         = 30
+	Env_InterhostBandwidth = "INTERHOST_BANDWIDTH"
 )
 
 var TheAPICore *APICore
@@ -41,6 +42,17 @@ func main() {
 		panic(err)
 	}
 	fmt.Printf("This host network address: %s (%s)\n", hostAddr, hostConf.HostNetworkInterface)
+	// bandwidth := 0
+	// if val := os.Getenv(Env_InterhostBandwidth); val != "" {
+	// 	if z, err := strconv.Atoi(val); err != nil {
+	// 		panic(err)
+	// 	} else {
+	// 		bandwidth = z
+	// 	}
+	// }
+	// if bandwidth > 0 {
+	// 	fmt.Printf("Interhost bandwidth: %d Mbps\n", bandwidth)
+	// }
 	TheAPICore = NewAPICore(hostConf, hostAddr)
 	fmt.Println("Interface IP addresses:")
 	if err := PrintInterfaceAddrs("- "); err != nil {

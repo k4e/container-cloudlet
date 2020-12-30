@@ -126,3 +126,63 @@ criu dump --tree <pid> -D /tmp/path/to/images --tcp-established --shell-job
 # Restore
 unshare -p -m --fork --mount-proc criu restore -D /tmp/path/to/images --tcp-established --shell-job
 ```
+
+# Docker プライベートレジストリ
+
+ここでレジストリサーバのアドレスは 192.168.2.12 とする．
+
+## サーバ (レジストリ)
+
+1. レジストリのイメージをプル ```[Server] sudo docker pull registry```
+
+1. 非 TLS 通信を許可 ```[Server] sudo vim /etc/docker/daemon.json```
+```
+{
+        "insecure-registries":["192.168.2.12:5000"]
+}
+```
+
+1. Docker 再起動 ```[Server] sudo systemctl restart docker```
+
+1. パスワードファイル作成
+```
+[Server]
+mkdir auth
+htpasswd -Bbn admin password > auth/htpasswd
+```
+
+1. レジストリを起動
+```
+[Server]
+sudo docker run -d -p 5000:5000 --name registry -v `pwd`/auth:/auth -e "REGISTRY_AUTH=htpasswd" -e "REGISTRY_AUTH_HTPASSWD_REALM=Registry Realm" -e "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd" registry
+```
+
+1. レジストリにログイン (Username: admin, Password: password) ```docker login 192.168.2.12:5000``` 
+
+1. タグ付け ```[Server] sudo docker build . -t 192.168.2.12:5000/app-sample```
+
+1. アプリのイメージを Push ```[Server] sudo docker push 192.168.2.12:5000/app-sample```
+
+## クライアント
+
+1. 非 TLS 通信を許可 ```[Client] sudo vim /etc/docker/daemon.json```
+```
+{
+        "insecure-registries":["192.168.2.12:5000"]
+}
+```
+
+1. Docker 再起動 ```[Client] sudo systemctl restart docker```
+
+1. レジストリにログイン (Username: admin, Password: password) ```docker login 192.168.2.12:5000```
+
+1. イメージを Pull ```[Client] sudo docker pull 192.168.2.12:5000/app-sample``` 
+
+### クライアントで Kubernetes が Pull する場合
+
+1. レジストリにログイン
+
+1. regcred を登録
+```
+sudo kubectl create secret generic regcred --from-file=.dockerconfigjson=/home/x0unnamed/.docker/config.json --type=kubernetes.io/dockerconfigjson
+```

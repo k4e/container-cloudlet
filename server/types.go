@@ -35,6 +35,9 @@ type Request struct {
 				In  int `json:"in"`
 				Ext int `json:"ext"`
 			} `json:"port"`
+			DstAddr string            `json:"dstAddr"`
+			Env     map[string]string `json:"env"`
+			BwLimit int               `json:"bwLimit"`
 		} `json:"lm"`
 		FwdLM struct {
 			Image   string `json:"image"`
@@ -45,6 +48,9 @@ type Request struct {
 				In  int `json:"in"`
 				Ext int `json:"ext"`
 			} `json:"port"`
+			DstAddr string            `json:"dstAddr"`
+			Env     map[string]string `json:"env"`
+			BwLimit int               `json:"bwLimit"`
 		} `json:"fwdlm"`
 	} `json:"deploy"`
 	Remove struct {
@@ -56,6 +62,7 @@ type Request struct {
 type RequestDumpStart struct {
 	Name    string `json:"name"`
 	DstAddr string `json:"dstAddr"`
+	BwLimit int    `json:"bwLimit"`
 }
 
 type Response struct {

@@ -2,17 +2,19 @@ package com.github.k4e;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import com.github.k4e.exp.PerformanceTest;
 import com.github.k4e.types.Request;
+import com.google.common.collect.Maps;
 
 public class App {
 
     // public static final UUID SESH_UUID = UUID.fromString("55C497AC-8AD5-4DA1-8673-6199443AE137");
 
     public static void main(String[] args) throws Exception {
-        System.out.println("Build 2020-11-04");
+        System.out.println("Build 2020-12-30");
         if (args.length < 1) {
             System.err.println("Method required: [deploy|remove|send|session|experiment]");
             System.exit(-1);
@@ -33,6 +35,7 @@ public class App {
             session(args);
             break;
         case "experiment":
+        case "exp":
             experiment(args);
             break;
         default:
@@ -58,12 +61,50 @@ public class App {
                 || ctype == Request.Deploy.Type.FWD
                 || ctype == Request.Deploy.Type.FWDLM) {
             if (args.length < 4) {
-                System.err.println("Src addr is required");
+                System.err.println("Src-addr is required");
                 System.exit(-1);
             }
             srcAddr = args[3];
         }
-        CloudletClient.deploy(host, ctype, srcAddr);
+        String dstAddr = null;
+        int bwLimit = 0;
+        Map<String, String> env = Maps.newHashMap();
+        for (int i = 1; i < args.length; ++i) {
+            if ("-e".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    String kv = args[i + 1];
+                    String[] kva = kv.split("=", 2);
+                    if (kva.length < 2) {
+                        System.err.println("-e following parameter must form of <env>=<value>");
+                        System.exit(-1);
+                    }
+                    env.put(kva[0], kva[1]);
+                } else {
+                    System.err.println("-e requires <env>=<value>");
+                    System.exit(-1);
+                }
+            } else if ("-d".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    dstAddr = args[i + 1];
+                } else {
+                    System.err.println("-d requires dst-addr");
+                    System.exit(-1);
+                }
+            } else if ("-l".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    bwLimit = Integer.parseInt(args[i + 1]);
+                } else {
+                    System.err.println("-l requires bandwidth-limit");
+                    System.exit(-1);
+                }
+            } else if (args[i].startsWith("-")) {
+                System.err.println("Ignored option: " + args[i]);
+            }
+        }
+        if (dstAddr == null) {
+            System.err.println("Warning: Dst addr is default");
+        }
+        CloudletClient.deploy(host, ctype, srcAddr, dstAddr, env, bwLimit);
     }
 
     private static void remove(String[] args) throws IOException {
@@ -109,13 +150,13 @@ public class App {
         }
         String item = args[1];
         switch (item) {
-        case "deploy":
+/*         case "deploy":
             deployTest(args);
             break;
         case "latency":
         case "ltc":
             latencyTest(args);
-            break;
+            break; */
         case "throughput":
         case "thru":
             throughputTest(args);
@@ -126,7 +167,7 @@ public class App {
         }
     }
 
-    public static void deployTest(String[] args) throws Exception {
+/*     public static void deployTest(String[] args) throws Exception {
         if (args.length < 4) {
             System.err.printf("Required args: %s %s %s <Host>\n",
                 args[0], args[1], deployTypeDescription());
@@ -149,7 +190,11 @@ public class App {
             }
             srcAddr = args[4];
         }
-        new PerformanceTest().deployTest(hostAddr, ctype, srcAddr);
+        String dstAddr = null;
+        if (dstAddr == null) {
+            System.err.println("Warning: Dst addr is default");
+        }
+        new PerformanceTest().deployTest(hostAddr, ctype, srcAddr, dstAddr);
     }
 
     public static void latencyTest(String[] args) throws Exception {
@@ -177,7 +222,7 @@ public class App {
             }
         }
         new PerformanceTest().latencyTest(hostAddr, dataSizeKB, count, fullCheck);
-    }
+    } */
 
     public static void throughputTest(String[] args) throws Exception {
         if (args.length < 4) {
@@ -202,20 +247,64 @@ public class App {
             }
             srcAddr = args[4];
         }
+        String dstAddr = null;
         int duration = PerformanceTest.DEFAULT_DURATION_SEC;
+        int dataSizeKB = -1;
+        int bwLimit = 0;
+        Map<String, String> env = Maps.newHashMap();
         for (int i = 1; i < args.length; ++i) {
-            if ("-d".equals(args[i])) {
+            if ("-t".equals(args[i])) {
                 if (i + 1 < args.length) {
                     duration = Integer.parseInt(args[i + 1]);
                 } else {
-                    System.err.println("-d requires duration(sec.)");
+                    System.err.println("-t requires duration(sec.)");
+                    System.exit(-1);
+                }
+            } else if ("-d".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    dstAddr = args[i + 1];
+                } else {
+                    System.err.println("-d requires dst-addr");
+                    System.exit(-1);
+                }
+            } else if ("-c".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    dataSizeKB = Integer.parseInt(args[i + 1]);
+                } else {
+                    System.err.println("-c requires data-size(KiB)");
+                    System.exit(-1);
+                }
+            } else if ("-l".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    bwLimit = Integer.parseInt(args[i + 1]);
+                } else {
+                    System.err.println("-l requires bandwidth-limit");
+                    System.exit(-1);
+                }
+            } else if ("-e".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    String kv = args[i + 1];
+                    String[] kva = kv.split("=", 2);
+                    if (kva.length < 2) {
+                        System.err.println("-e following parameter must form of <env>=<value>");
+                        System.exit(-1);
+                    }
+                    env.put(kva[0], kva[1]);
+                } else {
+                    System.err.println("-e requires <env>=<value>");
                     System.exit(-1);
                 }
             } else if (args[i].startsWith("-")) {
                 System.err.println("Ignored option: " + args[i]);
             }
         }
-        new PerformanceTest().throughputTest(hostAddr, ctype, srcAddr, duration);
+        if (dstAddr == null) {
+            System.err.println("Warning: Dst addr is default");
+        }
+        if (dataSizeKB < 0) {
+            dataSizeKB = PerformanceTest.DEFAULT_DATA_SIZE_KB;
+        }
+        new PerformanceTest().throughputTest(hostAddr, ctype, srcAddr, dstAddr, dataSizeKB, duration, env, bwLimit);
     }
 
     private static String deployTypeDescription() {

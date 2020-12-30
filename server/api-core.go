@@ -28,7 +28,10 @@ type DeployResource struct {
 	fwdsvc *ForwarderService
 }
 
-func NewAPICore(hostConf *HostConf, hostAddr string) *APICore {
+func NewAPICore(
+	hostConf *HostConf,
+	hostAddr string,
+) *APICore {
 	return &APICore{
 		HostConf: hostConf,
 		HostAddr: hostAddr,
@@ -126,8 +129,11 @@ func (p *APICore) DeployLM(req *Request) {
 	image := req.Deploy.LM.Image
 	portIn := int32(req.Deploy.LM.Port.In)
 	portExt := int32(req.Deploy.LM.Port.Ext)
+	env := req.Deploy.LM.Env
 	srcAddr := req.Deploy.LM.SrcAddr
 	srcName := req.Deploy.LM.SrcName
+	interDstAddr := req.Deploy.LM.DstAddr
+	bwLimit := req.Deploy.LM.BwLimit
 	podName := ToPodName(name)
 	containerName := ToContainerName(name)
 	serviceName := ToServiceName(name)
@@ -142,7 +148,7 @@ func (p *APICore) DeployLM(req *Request) {
 		return
 	}
 	command, args := GetRestorePodCommand()
-	newPod := p.createNewPod(clientset, name, podName, containerName, image, portIn, nil,
+	newPod := p.createNewPod(clientset, name, podName, containerName, image, portIn, env,
 		command, args)
 	clusterIP := p.createOrGetClusterIP(clientset, name, serviceName, clusterIPName, portIn)
 	if res.fwdsvc != nil {
@@ -165,18 +171,25 @@ func (p *APICore) DeployLM(req *Request) {
 		if err := WaitForPodReady(clientset, podName, WaitPodTimeout); err != nil {
 			Logger.ErrorE(err)
 		} else {
+			var thisAddr string
+			if interDstAddr != "" {
+				thisAddr = interDstAddr
+			} else {
+				thisAddr = p.HostAddr
+			}
 			srcAPIServerAddr := fmt.Sprintf("%s:%d", srcAddr, APIServerPort)
 			restore := &LM_Restore{
 				HostConf:         p.HostConf,
 				Clientset:        clientset,
 				RestConfig:       config,
-				ThisAddr:         p.HostAddr,
+				ThisAddr:         thisAddr,
 				DstNamespace:     namespace,
 				DstPodName:       podName,
 				DstContainerName: containerName,
 				SrcAddr:          srcAddr,
 				SrcAPIServerAddr: srcAPIServerAddr,
 				SrcName:          srcName,
+				BwLimit:          bwLimit,
 			}
 			if err := restore.ExecLM(); err != nil {
 				Logger.ErrorE(err)
@@ -193,9 +206,12 @@ func (p *APICore) DeployFwdLM(req *Request) {
 	image := req.Deploy.FwdLM.Image
 	portIn := int32(req.Deploy.FwdLM.Port.In)
 	portExt := int32(req.Deploy.FwdLM.Port.Ext)
+	env := req.Deploy.FwdLM.Env
 	srcAddr := req.Deploy.FwdLM.SrcAddr
 	srcPort := int32(req.Deploy.FwdLM.SrcPort)
 	srcName := req.Deploy.FwdLM.SrcName
+	interDstAddr := req.Deploy.FwdLM.DstAddr
+	bwLimit := req.Deploy.FwdLM.BwLimit
 	podName := ToPodName(name)
 	containerName := ToContainerName(name)
 	serviceName := ToServiceName(name)
@@ -225,7 +241,7 @@ func (p *APICore) DeployFwdLM(req *Request) {
 			return
 		}
 		command, args := GetRestorePodCommand()
-		newPod := p.createNewPod(clientset, name, podName, containerName, image, portIn, nil,
+		newPod := p.createNewPod(clientset, name, podName, containerName, image, portIn, env,
 			command, args)
 		clusterIP := p.createOrGetClusterIP(clientset, name, serviceName, clusterIPName, portIn)
 		if !newPod {
@@ -235,6 +251,12 @@ func (p *APICore) DeployFwdLM(req *Request) {
 		if err := WaitForPodReady(clientset, podName, WaitPodTimeout); err != nil {
 			Logger.ErrorE(err)
 			return
+		}
+		var thisAddr string
+		if interDstAddr != "" {
+			thisAddr = interDstAddr
+		} else {
+			thisAddr = p.HostAddr
 		}
 		srcAPIServerAddr := fmt.Sprintf("%s:%d", srcAddr, APIServerPort)
 		dstPodAddr := fmt.Sprintf("%s:%d", clusterIP, portIn)
@@ -247,7 +269,7 @@ func (p *APICore) DeployFwdLM(req *Request) {
 			HostConf:         p.HostConf,
 			Clientset:        clientset,
 			RestConfig:       config,
-			ThisAddr:         p.HostAddr,
+			ThisAddr:         thisAddr,
 			DstNamespace:     namespace,
 			DstPodName:       podName,
 			DstContainerName: containerName,
@@ -256,6 +278,7 @@ func (p *APICore) DeployFwdLM(req *Request) {
 			SrcName:          srcName,
 			Fwdsvc:           res.fwdsvc,
 			DstPodAddr:       dstPodTCPAddr,
+			BwLimit:          bwLimit,
 		}
 		if err := restore.ExecFwdLM(); err != nil {
 			Logger.ErrorE(err)
@@ -268,6 +291,7 @@ func (p *APICore) DumpStart(req *Request) *Response {
 	name := req.DumpStart.Name
 	srcHostAddr := p.HostAddr
 	dstHostAddr := req.DumpStart.DstAddr
+	bwLimit := req.DumpStart.BwLimit
 	podName := ToPodName(name)
 	containerName := ToContainerName(name)
 	val, _ := p.resmap.LoadOrStore(name, &DeployResource{})
@@ -287,6 +311,7 @@ func (p *APICore) DumpStart(req *Request) *Response {
 		PodName:       podName,
 		ContainerName: containerName,
 		DstAddr:       dstHostAddr,
+		BwLimit:       bwLimit,
 	}
 	if err := dump.Start(); err != nil {
 		Logger.ErrorE(err)
@@ -394,6 +419,7 @@ func (p *APICore) createOrGetClusterIP(
 		Logger.Info("Use existing service: " + svc.GetName())
 		clusterIP = svc.Spec.ClusterIP
 	}
+	Logger.DebugF("ClusterIP: %v\n", clusterIP)
 	return clusterIP
 }
 

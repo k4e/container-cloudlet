@@ -7,4 +7,4 @@ COPY . .
 RUN chmod +x /lmsupport.sh
 
 WORKDIR /
-CMD ["/bin/sh", "-c", "java -jar /app-sample/target/container-cloudlet-app-sample-0.0.1-jar-with-dependencies.jar & /lmsupport.sh $!"]
+CMD ["/bin/sh", "-c", "java -jar -Xmx1536m /app-sample/target/container-cloudlet-app-sample-0.0.1-jar-with-dependencies.jar & /lmsupport.sh $!"]

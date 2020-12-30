@@ -52,6 +52,7 @@ type LM_Restore struct {
 	SrcName          string
 	Fwdsvc           *ForwarderService
 	DstPodAddr       *net.TCPAddr
+	BwLimit          int
 }
 
 func (p *LM_Restore) ExecLM() error {
@@ -127,8 +128,8 @@ func (p *LM_Restore) exec(withFwd bool) (reterr error) {
 		LM_HostDataPort, LM_PodRsyncPort, os.Stdout, os.Stderr, k8sPortFwdCloseChan); err != nil {
 		return err
 	}
-	Logger.Info("[Restore] Send pre-dump request")
 	startPreDump := time.Now()
+	Logger.Info("[Restore] Send pre-dump request")
 	if err := p.sendDumpServiceRequest(conn, LM_MsgReqPreDump); err != nil {
 		return err
 	}
@@ -191,6 +192,7 @@ func (p *LM_Restore) sendDumpStartRequest() (*Response, error) {
 		DumpStart: RequestDumpStart{
 			Name:    p.SrcName,
 			DstAddr: p.ThisAddr,
+			BwLimit: p.BwLimit,
 		},
 	}
 	breq, err := json.Marshal(req)
@@ -244,6 +246,7 @@ type LM_DumpService struct {
 	PodName       string
 	ContainerName string
 	DstAddr       string
+	BwLimit       int
 }
 
 func (p *LM_DumpService) Start() (reterr error) {
@@ -290,6 +293,11 @@ func (p *LM_DumpService) Start() (reterr error) {
 	if err != nil {
 		return err
 	}
+	rsyncBw := p.getRsyncBandwidth()
+	rsyncBwOpt := ""
+	if rsyncBw > 0 {
+		rsyncBwOpt = fmt.Sprintf("--bwlimit=%d", rsyncBw)
+	}
 	go func() {
 		defer func() {
 			close(sshCloseChan)
@@ -325,9 +333,12 @@ func (p *LM_DumpService) Start() (reterr error) {
 				}
 				fmt.Fprintf(&argb, " && criu pre-dump --tree %d --images-dir %s %s --tcp-established --shell-job",
 					pid, imagesDir, prevImagesDirOpt)
-				fmt.Fprintf(&argb, " && rsync -rlOt %s/ rsync://%s:%d/%s",
-					LM_RsyncModuleDirectory, p.ThisAddr, LM_HostDataPort, LM_RsyncModuleName)
+				fmt.Fprintf(&argb, " && rsync %s -rlOt %s/ rsync://%s:%d/%s",
+					rsyncBwOpt, LM_RsyncModuleDirectory, p.ThisAddr, LM_HostDataPort, LM_RsyncModuleName)
 				Logger.Info("[Dump][svc] Exec mkdir && criu pre-dump && rsync")
+				if rsyncBwOpt != "" {
+					Logger.InfoF("[Dump][svc] Rsync bandwidth: %d KiB/s\n", rsyncBw)
+				}
 				if err := ExecutePod(p.Clientset, p.RestConfig, p.Namespace, p.PodName, p.ContainerName,
 					nil, os.Stdout, os.Stderr, "/bin/sh", "-c", argb.String()); err != nil {
 					Logger.ErrorE(err)
@@ -380,4 +391,11 @@ func (p *LM_DumpService) getMainPid() (int, error) {
 		return 0, errors.WithStack(err)
 	}
 	return ans, nil
+}
+
+func (p *LM_DumpService) getRsyncBandwidth() int {
+	if p.BwLimit <= 0 {
+		return 0
+	}
+	return p.BwLimit * 122
 }
