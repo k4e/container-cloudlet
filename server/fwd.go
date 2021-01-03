@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 )
@@ -19,12 +20,14 @@ const (
 )
 
 type Forwarder struct {
-	clientConn   *net.TCPConn
-	serverConn   *net.TCPConn
-	muxs         [2]sync.Mutex
-	isUpClosed   bool
-	isDownClosed bool
-	chanClosed   chan struct{}
+	clientConn         *net.TCPConn
+	serverConn         *net.TCPConn
+	muxs               [2]sync.Mutex
+	isUpClosed         bool
+	isDownClosed       bool
+	chanClosed         chan struct{}
+	dataRate           int
+	chanEmergencyClose chan struct{}
 }
 
 func NewForwarder() *Forwarder {
@@ -33,9 +36,26 @@ func NewForwarder() *Forwarder {
 	return fwdr
 }
 
+func (p *Forwarder) SetDataRate(dataRate int) {
+	p.dataRate = dataRate
+	if p.dataRate > 0 {
+		if p.clientConn != nil {
+			// bufsz := MinInt(p.dataRate*500, math.MaxInt32)
+			// p.clientConn.SetReadBuffer(bufsz)
+			p.clientConn.SetLinger(0)
+		}
+	}
+}
+
 func (p *Forwarder) Accept(network string, serverAddr *net.TCPAddr, clientConn *net.TCPConn) {
 	defer close(p.chanClosed)
 	p.clientConn = clientConn
+	if p.dataRate > 0 {
+		// bufsz := MinInt(p.dataRate*500, math.MaxInt32)
+		// p.clientConn.SetReadBuffer(bufsz)
+		p.clientConn.SetLinger(0)
+		p.chanEmergencyClose = make(chan struct{})
+	}
 	if serverConn, err := p.dialTCP(network, serverAddr); err != nil {
 		Logger.ErrorE(err)
 		if err := p.clientConn.Close(); err != nil {
@@ -83,6 +103,9 @@ func (p *Forwarder) closeUpstream() {
 	if p.isUpClosed {
 		return
 	}
+	if p.chanEmergencyClose != nil {
+		close(p.chanEmergencyClose)
+	}
 	if err := p.clientConn.CloseRead(); err != nil {
 		Logger.Warn("[Fwd] clientConn.CloseRead: " + err.Error())
 	}
@@ -109,11 +132,29 @@ func (p *Forwarder) upstream(clientIn io.Reader, serverOut io.Writer, wg *sync.W
 			wg.Done()
 		}
 	}()
+	if p.dataRate > 0 {
+		Logger.InfoF("[Fwd] Upstream: data rate limited to %d Mbps\n", p.dataRate)
+	}
 	buf := make([]byte, Fwdr_BufferSize)
 	for {
+		select {
+		case <-p.chanEmergencyClose:
+			return
+		default:
+		}
 		nr, cerr := clientIn.Read(buf)
 		if nr > 0 {
+			timeWriteStart := time.Now()
 			nw, serr := serverOut.Write(buf[0:nr])
+			if p.dataRate > 0 {
+				timeWrite := time.Now().Sub(timeWriteStart)
+				dataBytes := float64(nw)
+				rateBps := float64(p.dataRate) * 125000.0
+				timeToSleep := (dataBytes / rateBps) - timeWrite.Seconds()
+				if timeToSleep > 0 {
+					time.Sleep(time.Duration(timeToSleep*1000000000) * time.Nanosecond)
+				}
+			}
 			if serr != nil {
 				if IsClosedError(serr) {
 					Logger.Warn("[Fwd] Upstream: server is close")
@@ -175,4 +216,11 @@ func (p *Forwarder) downstream(serverIn io.Reader, clientOut io.Writer, wg *sync
 			return
 		}
 	}
+}
+
+func MinInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

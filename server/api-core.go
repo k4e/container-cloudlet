@@ -134,6 +134,7 @@ func (p *APICore) DeployLM(req *Request) {
 	srcName := req.Deploy.LM.SrcName
 	interDstAddr := req.Deploy.LM.DstAddr
 	bwLimit := req.Deploy.LM.BwLimit
+	iteration := req.Deploy.LM.Iteration
 	podName := ToPodName(name)
 	containerName := ToContainerName(name)
 	serviceName := ToServiceName(name)
@@ -190,6 +191,7 @@ func (p *APICore) DeployLM(req *Request) {
 				SrcAPIServerAddr: srcAPIServerAddr,
 				SrcName:          srcName,
 				BwLimit:          bwLimit,
+				Iteration:        iteration,
 			}
 			if err := restore.ExecLM(); err != nil {
 				Logger.ErrorE(err)
@@ -212,6 +214,8 @@ func (p *APICore) DeployFwdLM(req *Request) {
 	srcName := req.Deploy.FwdLM.SrcName
 	interDstAddr := req.Deploy.FwdLM.DstAddr
 	bwLimit := req.Deploy.FwdLM.BwLimit
+	iteration := req.Deploy.FwdLM.Iteration
+	dataRate := req.Deploy.FwdLM.DataRate
 	podName := ToPodName(name)
 	containerName := ToContainerName(name)
 	serviceName := ToServiceName(name)
@@ -227,7 +231,7 @@ func (p *APICore) DeployFwdLM(req *Request) {
 		if err != nil {
 			Logger.ErrorE(err)
 		} else {
-			if fsv, err := StartForwarderService("tcp", clientAddr, remoteAddr, true); err != nil {
+			if fsv, err := StartForwarderServiceDR("tcp", clientAddr, remoteAddr, true, dataRate); err != nil {
 				Logger.ErrorE(err)
 			} else {
 				res.fwdsvc = fsv
@@ -279,6 +283,7 @@ func (p *APICore) DeployFwdLM(req *Request) {
 			Fwdsvc:           res.fwdsvc,
 			DstPodAddr:       dstPodTCPAddr,
 			BwLimit:          bwLimit,
+			Iteration:        iteration,
 		}
 		if err := restore.ExecFwdLM(); err != nil {
 			Logger.ErrorE(err)

@@ -129,7 +129,7 @@ unshare -p -m --fork --mount-proc criu restore -D /tmp/path/to/images --tcp-esta
 
 # Docker プライベートレジストリ
 
-ここでレジストリサーバのアドレスは 192.168.2.12 とする．
+ここでレジストリサーバのアドレスは 192.168.0.12 とする．
 
 ## サーバ (レジストリ)
 
@@ -138,7 +138,7 @@ unshare -p -m --fork --mount-proc criu restore -D /tmp/path/to/images --tcp-esta
 1. 非 TLS 通信を許可 ```[Server] sudo vim /etc/docker/daemon.json```
 ```
 {
-        "insecure-registries":["192.168.2.12:5000"]
+        "insecure-registries":["192.168.0.12:5000"]
 }
 ```
 
@@ -157,26 +157,26 @@ htpasswd -Bbn admin password > auth/htpasswd
 sudo docker run -d -p 5000:5000 --name registry -v `pwd`/auth:/auth -e "REGISTRY_AUTH=htpasswd" -e "REGISTRY_AUTH_HTPASSWD_REALM=Registry Realm" -e "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd" registry
 ```
 
-1. レジストリにログイン (Username: admin, Password: password) ```docker login 192.168.2.12:5000``` 
+1. レジストリにログイン (Username: admin, Password: password) ```docker login 192.168.0.12:5000``` 
 
-1. タグ付け ```[Server] sudo docker build . -t 192.168.2.12:5000/app-sample```
+1. タグ付け ```[Server] sudo docker build . -t 192.168.0.12:5000/app-sample```
 
-1. アプリのイメージを Push ```[Server] sudo docker push 192.168.2.12:5000/app-sample```
+1. アプリのイメージを Push ```[Server] sudo docker push 192.168.0.12:5000/app-sample```
 
 ## クライアント
 
 1. 非 TLS 通信を許可 ```[Client] sudo vim /etc/docker/daemon.json```
 ```
 {
-        "insecure-registries":["192.168.2.12:5000"]
+        "insecure-registries":["192.168.0.12:5000"]
 }
 ```
 
 1. Docker 再起動 ```[Client] sudo systemctl restart docker```
 
-1. レジストリにログイン (Username: admin, Password: password) ```docker login 192.168.2.12:5000```
+1. レジストリにログイン (Username: admin, Password: password) ```docker login 192.168.0.12:5000```
 
-1. イメージを Pull ```[Client] sudo docker pull 192.168.2.12:5000/app-sample``` 
+1. イメージを Pull ```[Client] sudo docker pull 192.168.0.12:5000/app-sample``` 
 
 ### クライアントで Kubernetes が Pull する場合
 

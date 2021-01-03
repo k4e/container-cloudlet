@@ -14,7 +14,7 @@ public class App {
     // public static final UUID SESH_UUID = UUID.fromString("55C497AC-8AD5-4DA1-8673-6199443AE137");
 
     public static void main(String[] args) throws Exception {
-        System.out.println("Build 2020-12-30");
+        System.out.println("Build 2021-01-03");
         if (args.length < 1) {
             System.err.println("Method required: [deploy|remove|send|session|experiment]");
             System.exit(-1);
@@ -68,6 +68,8 @@ public class App {
         }
         String dstAddr = null;
         int bwLimit = 0;
+        int dataRate = 0;
+        int iteration = 0;
         Map<String, String> env = Maps.newHashMap();
         for (int i = 1; i < args.length; ++i) {
             if ("-e".equals(args[i])) {
@@ -90,11 +92,25 @@ public class App {
                     System.err.println("-d requires dst-addr");
                     System.exit(-1);
                 }
+            } else if ("-r".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    dataRate = Integer.parseInt(args[i + 1]);
+                } else {
+                    System.err.println("-r requires data-rate");
+                    System.exit(-1);
+                }
             } else if ("-l".equals(args[i])) {
                 if (i + 1 < args.length) {
                     bwLimit = Integer.parseInt(args[i + 1]);
                 } else {
                     System.err.println("-l requires bandwidth-limit");
+                    System.exit(-1);
+                }
+            } else if ("-i".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    iteration = Integer.parseInt(args[i + 1]);
+                } else {
+                    System.err.println("-l requires iteration");
                     System.exit(-1);
                 }
             } else if (args[i].startsWith("-")) {
@@ -104,7 +120,7 @@ public class App {
         if (dstAddr == null) {
             System.err.println("Warning: Dst addr is default");
         }
-        CloudletClient.deploy(host, ctype, srcAddr, dstAddr, env, bwLimit);
+        CloudletClient.deploy(host, ctype, srcAddr, dstAddr, env, bwLimit, iteration, dataRate);
     }
 
     private static void remove(String[] args) throws IOException {
@@ -251,6 +267,10 @@ public class App {
         int duration = PerformanceTest.DEFAULT_DURATION_SEC;
         int dataSizeKB = -1;
         int bwLimit = 0;
+        int dataRate = 0;
+        int resolution = 0;
+        int iteration = 0;
+        boolean upstreamMode = false;
         Map<String, String> env = Maps.newHashMap();
         for (int i = 1; i < args.length; ++i) {
             if ("-t".equals(args[i])) {
@@ -294,6 +314,30 @@ public class App {
                     System.err.println("-e requires <env>=<value>");
                     System.exit(-1);
                 }
+            } else if ("-r".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    dataRate = Integer.parseInt(args[i + 1]);
+                } else {
+                    System.err.println("-r requires data-rate");
+                    System.exit(-1);
+                }
+            } else if ("--res".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    resolution = Integer.parseInt(args[i + 1]);
+                } else {
+                    System.err.println("--res requires resolution");
+                    System.exit(-1);
+                }
+            } else if ("-i".equals(args[i])) {
+                if (i + 1 < args.length) {
+                    iteration = Integer.parseInt(args[i + 1]);
+                } else {
+                    System.err.println("-l requires iteration");
+                    System.exit(-1);
+                }
+            } else if ("-u".equals(args[i])) {
+                upstreamMode = true;
+                env.put("DIRECTION", "UP");
             } else if (args[i].startsWith("-")) {
                 System.err.println("Ignored option: " + args[i]);
             }
@@ -304,7 +348,8 @@ public class App {
         if (dataSizeKB < 0) {
             dataSizeKB = PerformanceTest.DEFAULT_DATA_SIZE_KB;
         }
-        new PerformanceTest().throughputTest(hostAddr, ctype, srcAddr, dstAddr, dataSizeKB, duration, env, bwLimit);
+        new PerformanceTest().throughputTest(hostAddr, ctype, srcAddr, dstAddr, dataSizeKB, duration,
+                env, bwLimit, iteration, dataRate, resolution, upstreamMode);
     }
 
     private static String deployTypeDescription() {

@@ -53,6 +53,7 @@ type LM_Restore struct {
 	Fwdsvc           *ForwarderService
 	DstPodAddr       *net.TCPAddr
 	BwLimit          int
+	Iteration        int
 }
 
 func (p *LM_Restore) ExecLM() error {
@@ -128,10 +129,16 @@ func (p *LM_Restore) exec(withFwd bool) (reterr error) {
 		LM_HostDataPort, LM_PodRsyncPort, os.Stdout, os.Stderr, k8sPortFwdCloseChan); err != nil {
 		return err
 	}
+	iteration := p.Iteration
+	if iteration < 1 {
+		iteration = 1
+	}
 	startPreDump := time.Now()
-	Logger.Info("[Restore] Send pre-dump request")
-	if err := p.sendDumpServiceRequest(conn, LM_MsgReqPreDump); err != nil {
-		return err
+	for itr := 0; itr < iteration; itr++ {
+		Logger.InfoF("[Restore] Send pre-dump request: %d\n", (itr + 1))
+		if err := p.sendDumpServiceRequest(conn, LM_MsgReqPreDump); err != nil {
+			return err
+		}
 	}
 	Logger.DebugF("[Restore] Pre-dump time (ms): %d\n", time.Now().Sub(startPreDump).Milliseconds())
 	if withFwd {
@@ -182,6 +189,7 @@ func (p *LM_Restore) exec(withFwd bool) (reterr error) {
 	if withFwd {
 		Logger.Info("[Restore] Change forwarding dst addr to the restored pod")
 		p.Fwdsvc.ChangeServerAddr(p.DstPodAddr)
+		p.Fwdsvc.ChangeDataRate(0)
 	}
 	return nil
 }

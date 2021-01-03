@@ -71,13 +71,16 @@ public class Request implements Serializable {
             public Port port;
             public String dstAddr;
             public Integer bwLimit;
-            public LM(String image, String srcAddr, String srcName, Port port, String dstAddr, int bwLimit) {
+            public Integer iteration;
+            public LM(String image, String srcAddr, String srcName, Port port, String dstAddr,
+                    int bwLimit, int iteration) {
                 this.image = image;
                 this.srcAddr = srcAddr;
                 this.srcName = srcName;
                 this.port = port;
                 this.dstAddr = dstAddr;
                 this.bwLimit = bwLimit;
+                this.iteration = iteration;
             }
         }
         public static class FwdLM implements Serializable {
@@ -89,7 +92,10 @@ public class Request implements Serializable {
             public Port port;
             public String dstAddr;
             public Integer bwLimit;
-            public FwdLM(String image, String srcAddr, String srcName, int srcPort, Port port, String dstAddr, int bwLimit) {
+            public Integer iteration;
+            public Integer dataRate;
+            public FwdLM(String image, String srcAddr, String srcName, int srcPort, Port port, String dstAddr,
+                    int bwLimit, int iteration, int dataRate) {
                 this.image = image;
                 this.srcAddr = srcAddr;
                 this.srcName = srcName;
@@ -97,6 +103,8 @@ public class Request implements Serializable {
                 this.port = port;
                 this.dstAddr = dstAddr;
                 this.bwLimit = bwLimit;
+                this.iteration = iteration;
+                this.dataRate = dataRate;
             }
         }
         public String name;

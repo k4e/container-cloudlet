@@ -136,7 +136,8 @@ public class PerformanceTest {
     } */
 
     public void throughputTest(String hostAddr, Request.Deploy.Type type, String srcAddr, String dstAddr,
-            int dataSizeKB, int duration, Map<String, String> env, int bwLimit)
+            int dataSizeKB, int duration, Map<String, String> env, int bwLimit, int iteration,
+             int dataRate, int resolution, boolean upstreamMode)
     throws IOException, InterruptedException {
         if ((type == Request.Deploy.Type.FWD || type == Request.Deploy.Type.LM)
                 && Strings.isNullOrEmpty(srcAddr)) {
@@ -150,18 +151,19 @@ public class PerformanceTest {
         }
         System.out.printf("Duration: %d sec\n", duration);
         System.out.printf("Data size: %d KiB\n", dataSizeKB);
+        System.out.printf("Resolution: %d\n", resolution);
         System.out.printf("Dst addr: %s\n", Optional.ofNullable(dstAddr).orElse("(none)"));
         int dataSizeBytes = dataSizeKB * 1024;
         Gson gson = new Gson();
-        Request request = CloudletClient.createAppSampleRequest(type, srcAddr, dstAddr, env, bwLimit);
+        Request request = CloudletClient.createAppSampleRequest(type, srcAddr, dstAddr, env, bwLimit, iteration, dataRate);
         String req = gson.toJson(request);
         byte[] data = generateBytes(dataSizeBytes);
         byte[] buf = new byte[dataSizeBytes];
         char[] cbuf = new char[4096];
         byte[] testData = generateBytes(1);
         byte[] testBuf = new byte[8];
-        int consistent = 0;
-        int inconsistent = 0;
+        // int consistent = 0;
+        // int inconsistent = 0;
         int cntError = 0;
         String lastError = null;
         System.out.println("--- Throughput test start ---");
@@ -184,6 +186,7 @@ public class PerformanceTest {
         boolean exceptWhileSesh = true;
         while (getCurrentTimeX.get() < duration * 1000000000L) {
             boolean veryFirstOfSesh = true;
+            int resStep = 0;
             long accumBytes = 0L;
             try (Socket sockApp = new Socket(hostAddr, CloudletClient.DEFAULT_APP_EXT_PORT)) {
                 exceptWhileSesh = true;
@@ -199,41 +202,51 @@ public class PerformanceTest {
                         lastTimeX = currentTimeX;
                         veryFirstOfSesh = false;
                     }
-                    boolean szTest = true;
+                    // boolean szTest = true;
                     out.write(data);
                     out.flush();
                     int wroteSz = data.length;
                     // accumBytes += wroteSz;
-                    int readSz = 0;
-                    while (readSz < wroteSz) {
-                        int n = in.read(buf, readSz, buf.length - readSz);
-                        if (!(n > 0)) {
-                            System.out.println("# Read returned " + n);
-                            break;
-                        }
-                        readSz += n;
-                        accumBytes += n;
-                    }
-                    if (!sizeTest(wroteSz, readSz)) {
-                        szTest = false;
-                    }
-                    long currentTimeX = getCurrentTimeX.get();
-                    if (accumBytes > 0) {
-                        double lastTimeXS = (lastTimeX + 10000) / 1000000000.;
-                        double timeXS = currentTimeX / 1000000000.;
-                        double dataSizeMB = ((double)(accumBytes) * 8.) / (1000 * 1000);
-                        long elapsed = currentTimeX - lastTimeX;
-                        double thruput = (dataSizeMB / (elapsed / 1000000000.));
-                        System.out.printf("%f\t%f\n", lastTimeXS, thruput);
-                        System.out.printf("%f\t%f\n", timeXS, thruput);
-                        lastTimeX = currentTimeX;
-                        accumBytes = 0L;
-                    }
-                    if (szTest) {
-                        ++consistent;
+                    if (upstreamMode) {
+                        in.read(buf);
+                        accumBytes += wroteSz;
                     } else {
-                        ++inconsistent;
+                        int readSz = 0;
+                        while (readSz < wroteSz) {
+                            int n = in.read(buf, readSz, buf.length - readSz);
+                            if (!(n > 0)) {
+                                System.out.println("# Read returned " + n);
+                                break;
+                            }
+                            readSz += n;
+                            accumBytes += n;
+                        }
                     }
+                    // if (!sizeTest(wroteSz, readSz)) {
+                    //     szTest = false;
+                    // }
+                    if (resolution <= resStep) {
+                    long currentTimeX = getCurrentTimeX.get();
+                        if (accumBytes > 0) {
+                            // double lastTimeXS = (lastTimeX + 10000) / 1000000000.;
+                            double timeXS = currentTimeX / 1000000000.;
+                            double dataSizeMB = ((double)(accumBytes) * 8.) / (1000 * 1000);
+                            long elapsed = currentTimeX - lastTimeX;
+                            double thruput = (dataSizeMB / (elapsed / 1000000000.));
+                            // System.out.printf("%f\t%f\n", lastTimeXS, thruput);
+                            System.out.printf("%f\t%f\n", timeXS, thruput);
+                            lastTimeX = currentTimeX;
+                            accumBytes = 0L;
+                        }
+                        resStep = 0;
+                    } else {
+                        resStep++;
+                    }
+                    // if (szTest) {
+                    //     ++consistent;
+                    // } else {
+                    //     ++inconsistent;
+                    // }
                 }
             } catch (IOException e) {
                 if (exceptWhileSesh) {
@@ -249,10 +262,10 @@ public class PerformanceTest {
                 ++cntError;
                 System.out.println("# Exception: " + e.getMessage());
                 lastError = e.getMessage();
-                Thread.sleep(250);
+                Thread.sleep(10);
             }
         }
-        System.out.printf("Test result: consistent: %d, inconsistent: %d\n", consistent, inconsistent);
+        // System.out.printf("Test result: consistent: %d, inconsistent: %d\n", consistent, inconsistent);
         System.out.printf("Error count: %d\n", cntError);
         if (!Strings.isNullOrEmpty(lastError)) {
             System.out.println("Last Error: " + lastError);
@@ -260,7 +273,7 @@ public class PerformanceTest {
         System.out.println("--- Throughput test finish ---");
     }
 
-    public void oldThroughputTest(String hostAddr, Request.Deploy.Type type, String srcAddr, String dstAddr,
+/*     public void oldThroughputTest(String hostAddr, Request.Deploy.Type type, String srcAddr, String dstAddr,
             int dataSizeKB, int duration, Map<String, String> env, int bwLimit)
     throws IOException, InterruptedException {
         if ((type == Request.Deploy.Type.FWD || type == Request.Deploy.Type.LM)
@@ -307,7 +320,6 @@ public class PerformanceTest {
         System.out.println("Time(s)\tThruput(Mbps)");
         while (getCurrentTimeX.get() < duration * 1000000000L) {
             long accumBytes = 0L;
-            boolean firstPass = false;
             try (Socket sockApp = new Socket(hostAddr, CloudletClient.DEFAULT_APP_EXT_PORT)) {
                 OutputStream out = sockApp.getOutputStream();
                 InputStream in = sockApp.getInputStream();
@@ -365,7 +377,7 @@ public class PerformanceTest {
             System.out.println("Last Error: " + lastError);
         }
         System.out.println("--- Throughput test finish ---");
-    }
+    } */
 
     private byte[] generateBytes(int b) {
         byte[] a = new byte[b];

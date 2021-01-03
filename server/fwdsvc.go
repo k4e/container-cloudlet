@@ -24,6 +24,7 @@ type ForwarderService struct {
 	chanSuspend chan struct{}
 	isSuspended bool
 	chanClose   chan struct{}
+	dataRate    int
 }
 
 func StartForwarderService(
@@ -31,6 +32,16 @@ func StartForwarderService(
 	clientAddr *net.TCPAddr,
 	serverAddr *net.TCPAddr,
 	isExtHost bool,
+) (*ForwarderService, error) {
+	return StartForwarderServiceDR(network, clientAddr, serverAddr, isExtHost, 0)
+}
+
+func StartForwarderServiceDR(
+	network string,
+	clientAddr *net.TCPAddr,
+	serverAddr *net.TCPAddr,
+	isExtHost bool,
+	dataRate int,
 ) (*ForwarderService, error) {
 	fwdrs := list.New()
 	condSuspend := sync.NewCond(&sync.Mutex{})
@@ -45,6 +56,7 @@ func StartForwarderService(
 		condSuspend: condSuspend,
 		chanSuspend: chanSuspend,
 		chanClose:   chanClose,
+		dataRate:    dataRate,
 	}
 	ln, err := net.ListenTCP(network, clientAddr)
 	if err != nil {
@@ -105,6 +117,13 @@ func (p *ForwarderService) ChangeServerAddr(serverAddr *net.TCPAddr) {
 	p.serverAddr = serverAddr
 }
 
+func (p *ForwarderService) ChangeDataRate(dataRate int) {
+	if !p.isSuspended {
+		panic("Must be suspended before ChangeDataRate")
+	}
+	p.dataRate = dataRate
+}
+
 func (p *ForwarderService) listener(ln *net.TCPListener) {
 	for {
 		p.condSuspend.L.Lock()
@@ -133,6 +152,7 @@ func (p *ForwarderService) listener(ln *net.TCPListener) {
 		}
 		Logger.Debug("[Fwdsvc] Accept client conn: " + clientConn.RemoteAddr().String())
 		fwdr := NewForwarder()
+		fwdr.SetDataRate(p.dataRate)
 		p.muxFwdrs.Lock()
 		elem := p.fwdrs.PushBack(fwdr)
 		p.muxFwdrs.Unlock()

@@ -13,14 +13,17 @@ import java.util.Collections;
 import java.util.Enumeration;
 
 public class EchoServer {
-    private static final int BUF_SIZE = 32 * 1024 * 1024;
 
+    private static final int BUF_SIZE = 4 * 1024 * 1024;
+
+    private final boolean upstreamMode;
     private final int port;
     private final int sleepMs;
 
-    public EchoServer(int port, int sleepMs) {
+    public EchoServer(int port, int sleepMs, boolean upstreamMode) {
         this.port = port;
         this.sleepMs = sleepMs;
+        this.upstreamMode = upstreamMode;
     }
 
     public void start() {
@@ -57,11 +60,12 @@ public class EchoServer {
 
     class SocketHandler implements Runnable {
         private Socket sock;
+        private volatile char[] buf;
         public SocketHandler(Socket sock) {
             this.sock = sock;
+            this.buf = new char[BUF_SIZE];
         }
         @Override public void run() {
-            char[] buf = new char[BUF_SIZE];
             try {
                 System.out.printf("[Accepted %s]\n", sock.getInetAddress());
                 InputStreamReader reader = new InputStreamReader(sock.getInputStream());
@@ -74,9 +78,16 @@ public class EchoServer {
                     if (sleepMs > 0) {
                         Thread.sleep(sleepMs);
                     }
-                    char[] output = Arrays.copyOfRange(buf, 0, count);
-                    writer.print(output);
-                    writer.flush();
+                    if (upstreamMode) {
+                        char[] output = new char[]{buf[0]};
+                        writer.print(output);
+                        writer.flush();
+                    } else {
+                        char[] output = Arrays.copyOfRange(buf, 0, count);
+                        writer.print(output);
+                        writer.flush();
+                    }
+                    
                 }
             } catch (IOException e) {
                 e.printStackTrace();

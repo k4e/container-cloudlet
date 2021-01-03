@@ -10,7 +10,7 @@ public class App {
     private static volatile byte[] padding;
 
     public static void main( String[] args ) {
-        System.out.println("Build 2020-12-30");
+        System.out.println("Build 2021-01-03");
         String envSleepMs = System.getenv("SLEEP_MS");
         int sleepMs = 0;
         if (!Strings.isNullOrEmpty(envSleepMs)) {
@@ -31,7 +31,11 @@ public class App {
                 padding[i] = (byte)RANDOM.nextInt(Byte.MAX_VALUE + 1);
             }
         }
+        boolean upstreamMode = "UP".equalsIgnoreCase(System.getenv("DIRECTION"));
+        if (upstreamMode) {
+            System.out.println("Direction: up");
+        }
         System.out.println("Started echo server");
-        new EchoServer(8888, sleepMs).start();
+        new EchoServer(8888, sleepMs, upstreamMode).start();
     }
 }
