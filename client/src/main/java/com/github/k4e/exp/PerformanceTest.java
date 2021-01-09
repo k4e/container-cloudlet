@@ -157,10 +157,10 @@ public class PerformanceTest {
         Gson gson = new Gson();
         Request request = CloudletClient.createAppSampleRequest(type, srcAddr, dstAddr, env, bwLimit, iteration, dataRate);
         String req = gson.toJson(request);
-        byte[] data = generateBytes(dataSizeBytes);
+        byte[] data = generateBytes(dataSizeBytes, upstreamMode);
         byte[] buf = new byte[dataSizeBytes];
         char[] cbuf = new char[4096];
-        byte[] testData = generateBytes(1);
+        byte[] testData = generateBytes(1, false);
         byte[] testBuf = new byte[8];
         // int consistent = 0;
         // int inconsistent = 0;
@@ -379,11 +379,15 @@ public class PerformanceTest {
         System.out.println("--- Throughput test finish ---");
     } */
 
-    private byte[] generateBytes(int b) {
+    private byte[] generateBytes(int b, boolean upstreamMode) {
         byte[] a = new byte[b];
         for (int i = 0; i < b; ++i) {
             // a[i] = Integer.valueOf('a' + random.nextInt(26)).byteValue();
-            a[i] = Integer.valueOf('0').byteValue();
+            char ch = 'X';
+            if (upstreamMode) {
+                ch = 'U';
+            }
+            a[i] = Integer.valueOf(ch).byteValue();
         }
         return a;
     }

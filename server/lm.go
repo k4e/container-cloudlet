@@ -129,13 +129,18 @@ func (p *LM_Restore) exec(withFwd bool) (reterr error) {
 		LM_HostDataPort, LM_PodRsyncPort, os.Stdout, os.Stderr, k8sPortFwdCloseChan); err != nil {
 		return err
 	}
-	iteration := p.Iteration
-	if iteration < 1 {
+	iteration := 1
+	if p.Iteration > 0 {
+		iteration = p.Iteration
+	} else if p.Iteration == 0 {
 		iteration = 1
+	} else {
+		iteration = 0
 	}
+	Logger.DebugF("[Restore] Pre-dump iteration: %d\n", iteration)
 	startPreDump := time.Now()
 	for itr := 0; itr < iteration; itr++ {
-		Logger.InfoF("[Restore] Send pre-dump request: %d\n", (itr + 1))
+		Logger.InfoF("[Restore] Send pre-dump request (%d)\n", (itr + 1))
 		if err := p.sendDumpServiceRequest(conn, LM_MsgReqPreDump); err != nil {
 			return err
 		}
@@ -169,7 +174,7 @@ func (p *LM_Restore) exec(withFwd bool) (reterr error) {
 		if err := ExecutePod(p.Clientset, p.RestConfig, p.DstNamespace, p.DstPodName, p.DstContainerName,
 			nil, os.Stdout, os.Stderr, "/bin/sh", "-c", fmt.Sprintf(
 				"unshare -p -m --fork --mount-proc"+
-					" criu restore --images-dir %s/final --tcp-established --shell-job %s &",
+					" criu restore --images-dir %s/final --shell-job --tcp-close %s &",
 				LM_DumpImagesDir, actionScriptOpt)); err != nil {
 			Logger.ErrorE(err)
 		}
@@ -339,7 +344,7 @@ func (p *LM_DumpService) Start() (reterr error) {
 				if itercnt > 1 {
 					prevImagesDirOpt = fmt.Sprintf("--prev-images-dir ../%d", itercnt-1)
 				}
-				fmt.Fprintf(&argb, " && criu pre-dump --tree %d --images-dir %s %s --tcp-established --shell-job",
+				fmt.Fprintf(&argb, " && criu pre-dump --tree %d --images-dir %s %s --tcp-close --shell-job",
 					pid, imagesDir, prevImagesDirOpt)
 				fmt.Fprintf(&argb, " && rsync %s -rlOt %s/ rsync://%s:%d/%s",
 					rsyncBwOpt, LM_RsyncModuleDirectory, p.ThisAddr, LM_HostDataPort, LM_RsyncModuleName)
@@ -362,7 +367,7 @@ func (p *LM_DumpService) Start() (reterr error) {
 				if itercnt > 1 {
 					prevImagesDirOpt = fmt.Sprintf("--prev-images-dir ../%d", itercnt-1)
 				}
-				fmt.Fprintf(&argb, " && criu dump --tree %d --images-dir %s %s --tcp-established --shell-job --track-mem",
+				fmt.Fprintf(&argb, " && criu dump --tree %d --images-dir %s %s --tcp-close --shell-job --track-mem",
 					pid, imagesDir, prevImagesDirOpt)
 				fmt.Fprintf(&argb, " && rsync -rlOt %s/ rsync://%s:%d/%s",
 					LM_RsyncModuleDirectory, p.ThisAddr, LM_HostDataPort, LM_RsyncModuleName)

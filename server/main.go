@@ -14,6 +14,7 @@ import (
 const (
 	APIServerPort          = 9999
 	RequestTimeout         = 30
+	DefaultGatewayIf       = "docker0"
 	Env_InterhostBandwidth = "INTERHOST_BANDWIDTH"
 )
 
@@ -41,7 +42,15 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("This host network address: %s (%s)\n", hostAddr, hostConf.HostNetworkInterface)
+	fmt.Printf("Host network address: %s (%s)\n", hostAddr, hostConf.HostNetworkInterface)
+	gatewayIf := DefaultGatewayIf
+	gatewayAddr := ""
+	if addr, err := GetInterfaceAddr(gatewayIf); err == nil {
+		gatewayAddr = addr
+	}
+	if gatewayAddr != "" {
+		fmt.Printf("Gateway address: %s (%s)\n", gatewayAddr, gatewayIf)
+	}
 	// bandwidth := 0
 	// if val := os.Getenv(Env_InterhostBandwidth); val != "" {
 	// 	if z, err := strconv.Atoi(val); err != nil {
@@ -53,7 +62,7 @@ func main() {
 	// if bandwidth > 0 {
 	// 	fmt.Printf("Interhost bandwidth: %d Mbps\n", bandwidth)
 	// }
-	TheAPICore = NewAPICore(hostConf, hostAddr)
+	TheAPICore = NewAPICore(hostConf, hostAddr, gatewayAddr)
 	fmt.Println("Interface IP addresses:")
 	if err := PrintInterfaceAddrs("- "); err != nil {
 		panic(err)

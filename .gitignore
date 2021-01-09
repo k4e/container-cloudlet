@@ -1,5 +1,6 @@
 go.sum
 /client/target/
 /app/app-sample/target/
+/app-java/app-sample/target/
 hostconf.yaml
 sshconf.yaml

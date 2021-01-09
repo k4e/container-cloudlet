@@ -7,6 +7,7 @@ package main
 */
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -90,10 +91,21 @@ func (p *Forwarder) Close() {
 }
 
 func (p *Forwarder) dialTCP(network string, serverAddr *net.TCPAddr) (*net.TCPConn, error) {
-	conn, err := net.DialTCP(network, nil, serverAddr)
+	var laddr *net.TCPAddr
+	gatewayAddr := TheAPICore.GatewayAddr
+	if gatewayAddr != "" {
+		addrstr := fmt.Sprintf("%s:0", gatewayAddr)
+		if la, err := net.ResolveTCPAddr(network, addrstr); err != nil {
+			Logger.Warn("[Fwd] ResolveTCPAddr: " + err.Error())
+		} else {
+			laddr = la
+		}
+	}
+	conn, err := net.DialTCP(network, laddr, serverAddr)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	Logger.DebugF("[Fwd] laddr: %v\n", conn.LocalAddr())
 	return conn, nil
 }
 

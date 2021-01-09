@@ -18,9 +18,10 @@ const (
 )
 
 type APICore struct {
-	HostConf *HostConf
-	HostAddr string
-	resmap   *sync.Map
+	HostConf    *HostConf
+	HostAddr    string
+	GatewayAddr string
+	resmap      *sync.Map
 }
 
 type DeployResource struct {
@@ -31,11 +32,13 @@ type DeployResource struct {
 func NewAPICore(
 	hostConf *HostConf,
 	hostAddr string,
+	gatewayAddr string,
 ) *APICore {
 	return &APICore{
-		HostConf: hostConf,
-		HostAddr: hostAddr,
-		resmap:   &sync.Map{},
+		HostConf:    hostConf,
+		HostAddr:    hostAddr,
+		GatewayAddr: gatewayAddr,
+		resmap:      &sync.Map{},
 	}
 }
 
